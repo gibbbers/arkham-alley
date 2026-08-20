@@ -3034,6 +3034,15 @@ function updateFly(dt){
 function updateCity(dt, t){
   updateFly(dt);
   updateGround(dt, t);
+  // the interior only exists when you're near it — hiding the group also
+  // drops its ~20 lights out of the shader
+  {
+    const dHall = Math.hypot(cityCam.position.x-HALL.x, cityCam.position.z-HALL.z);
+    const near = dHall < 95, lit = dHall < 230;
+    if(hallInterior.visible !== near) hallInterior.visible = near;
+    if(hallLights.visible !== lit) hallLights.visible = lit;
+    if(near) for(const sh of hallShafts) sh.material.uniforms.uTime.value = t;
+  }
   citySky.position.copy(cityCam.position);
   citySky.material.uniforms.uTime.value = t;
   cityBeacons.forEach(b=>{
@@ -3867,10 +3876,386 @@ function updateGround(dt, t){
   GND.pedIMs.forEach(im=>{ if(im.count) im.instanceMatrix.needsUpdate = true; });
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   16. CITY HALL — landmark exterior with a fully enterable interior
+   ══════════════════════════════════════════════════════════════════════════ */
+const HALL = (function(){
+  const c = blockCentre(RESERVED.hall.c, RESERVED.hall.r, new THREE.Vector3());
+  return { x:c.x, z:c.z, w:46, d:32, h:19, plinth:2.4 };
+})();
+const hallGroup    = new THREE.Group();   // exterior — always drawn
+const hallLights   = new THREE.Group();   // facade lighting, gated by distance
+const hallInterior = new THREE.Group();   // interior — only near the player
+cityScene.add(hallGroup, hallInterior);
+
+/* ---- materials: the same PBR recipe as everything else ------------------- */
+const HM = (function(){
+  const lime = cloneSet(TEX.concrete, 3, 3);
+  const marbleTex = (function(){
+    const S = 512, c = cv(S,S), x = c.getContext('2d',{willReadFrequently:true});
+    x.fillStyle = '#c9c6bd'; x.fillRect(0,0,S,S);
+    for(let i=0;i<70;i++){                       // veining
+      x.strokeStyle = `rgba(${90+rand()*50|0},${88+rand()*46|0},${92+rand()*50|0},${0.10+rand()*0.28})`;
+      x.lineWidth = 0.6 + rand()*2.6;
+      x.beginPath();
+      let px = rand()*S, py = rand()*S;
+      x.moveTo(px,py);
+      for(let k=0;k<7;k++){ px += rr(-90,90); py += rr(-90,90); x.lineTo(px,py); }
+      x.stroke();
+    }
+    x.globalAlpha = 0.18;
+    for(let i=0;i<220;i++){
+      const v = 150 + (rand()*80|0);
+      x.fillStyle = `rgb(${v},${v-3},${v-9})`;
+      x.beginPath(); x.arc(rand()*S, rand()*S, rand()*26, 0, 6.283); x.fill();
+    }
+    x.globalAlpha = 1;
+    return texFrom(c, 6, 6, true);
+  })();
+  return {
+    stone : new THREE.MeshStandardMaterial({ map:lime.map, normalMap:lime.normalMap,
+              roughnessMap:lime.roughnessMap, color:0xb9b3a4, roughness:1.0,
+              metalness:0.0, envMapIntensity:0.55 }),
+    stoneT: new THREE.MeshStandardMaterial({ color:0xa9a396, roughness:0.88, metalness:0.0,
+              envMapIntensity:0.5 }),
+    marble: new THREE.MeshPhysicalMaterial({ map:marbleTex, color:0xffffff, roughness:0.085,
+              metalness:0.02, envMapIntensity:1.8, clearcoat:0.7, clearcoatRoughness:0.06 }),
+    brass : new THREE.MeshStandardMaterial({ color:0xb08a3c, roughness:0.28, metalness:0.95,
+              envMapIntensity:1.7 }),
+    wood  : new THREE.MeshStandardMaterial({ color:0x3b2418, roughness:0.42, metalness:0.05,
+              envMapIntensity:0.9 }),
+    wood2 : new THREE.MeshStandardMaterial({ color:0x52341f, roughness:0.5, metalness:0.03,
+              envMapIntensity:0.8 }),
+    leather:new THREE.MeshPhysicalMaterial({ color:0x21402c, roughness:0.55, metalness:0.0,
+              sheen:0.6, sheenColor:new THREE.Color(0x6fa87f), envMapIntensity:0.8 }),
+    glass : new THREE.MeshPhysicalMaterial({ color:0x0a1018, roughness:0.06, metalness:0.0,
+              transmission:0.0, envMapIntensity:2.2, clearcoat:1.0 }),
+    bulb  : new THREE.MeshStandardMaterial({ color:0x2a2008, emissive:0xffd9a0,
+              emissiveIntensity:6.5, roughness:0.35 }),
+    carpet: new THREE.MeshStandardMaterial({ color:0x4a1518, roughness:0.95, metalness:0.0,
+              envMapIntensity:0.35 })
+  };
+})();
+
+function hbox(g, mat, w,h,d, x,y,z, rx,ry,rz, shadow){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  m.position.set(x,y,z); if(rx||ry||rz) m.rotation.set(rx||0,ry||0,rz||0);
+  m.castShadow = shadow !== false; m.receiveShadow = true; g.add(m); return m;
+}
+function hcyl(g, mat, rt,rb,h,seg, x,y,z, shadow){
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,seg), mat);
+  m.position.set(x,y,z);
+  m.castShadow = shadow !== false; m.receiveShadow = true; g.add(m); return m;
+}
+/* a fluted classical column with base and capital */
+function column(g, x, z, h, rad){
+  hcyl(g, HM.stoneT, rad*1.28, rad*1.34, 0.55, 12, x, 0.28, z);
+  hcyl(g, HM.stone,  rad*0.88, rad*1.02, h,    16, x, 0.55+h*0.5, z);
+  hcyl(g, HM.stoneT, rad*1.30, rad*0.95, 0.62, 12, x, 0.55+h+0.31, z);
+  hbox (g, HM.stoneT, rad*2.9, 0.30, rad*2.9, x, 0.55+h+0.77, z);
+}
+
+/* ══ exterior ══════════════════════════════════════════════════════════════ */
+(function hallExterior(){
+  const g = hallGroup;
+  g.position.set(HALL.x, 0, HALL.z);
+  const W = HALL.w, D = HALL.d, H = HALL.h, PL = HALL.plinth;
+
+  // plinth and the grand stair
+  hbox(g, HM.stone, W+7, PL, D+7, 0, PL*0.5, 0);
+  for(let i=0;i<8;i++){
+    const t = i/8;
+    hbox(g, HM.stoneT, 26 - i*0.5, PL/8, 1.5, 0, PL - (i+0.5)*(PL/8), D*0.5 + 3.6 + i*1.45);
+  }
+  // main mass and wings
+  hbox(g, HM.stone, W, H, D, 0, PL + H*0.5, 0);
+  for(const sx of [-1, 1]){
+    hbox(g, HM.stone, 13, H*0.78, D*0.72, sx*(W*0.5 + 5.5), PL + H*0.39, -1.5);
+    hbox(g, HM.stoneT, 14, 0.9, D*0.72+1, sx*(W*0.5 + 5.5), PL + H*0.78 + 0.45, -1.5);
+  }
+  // cornice band and roof balustrade
+  hbox(g, HM.stoneT, W+2.2, 1.3, D+2.2, 0, PL + H + 0.65, 0);
+  for(const [ox,oz,bw,bd] of [[0,D*0.5+1,W+2,0.6],[0,-(D*0.5+1),W+2,0.6],
+                              [W*0.5+1,0,0.6,D+2],[-(W*0.5+1),0,0.6,D+2]])
+    hbox(g, HM.stoneT, bw, 1.5, bd, ox, PL + H + 2.05, oz);
+
+  // portico: eight columns and a pediment
+  const pz = D*0.5 + 2.6, colH = 12.5;
+  for(let i=0;i<8;i++){
+    const cx = -13.3 + i*3.8;
+    const cg = new THREE.Group(); cg.position.set(0, PL, 0); g.add(cg);
+    column(cg, cx, pz, colH, 0.78);
+  }
+  hbox(g, HM.stoneT, 30.5, 1.5, 5.4, 0, PL + colH + 2.2, pz - 0.4);
+  {   // pediment triangle
+    const sh = new THREE.Shape();
+    sh.moveTo(-15.2, 0); sh.lineTo(15.2, 0); sh.lineTo(0, 5.2); sh.closePath();
+    const ped = new THREE.Mesh(new THREE.ExtrudeGeometry(sh,
+      { depth:1.4, bevelEnabled:false }), HM.stoneT);
+    ped.position.set(0, PL + colH + 2.95, pz + 1.4);
+    ped.castShadow = true; ped.receiveShadow = true; g.add(ped);
+    const clock = new THREE.Mesh(new THREE.CircleGeometry(1.7, 24), HM.marble);
+    clock.position.set(0, PL + colH + 5.1, pz + 2.9); g.add(clock);
+    const face = new THREE.Mesh(new THREE.TorusGeometry(1.75, 0.16, 8, 26), HM.brass);
+    face.position.copy(clock.position); g.add(face);
+    for(const [len,ang] of [[1.15, 1.1],[0.8, -0.5]]){
+      const hd = hbox(g, HM.brass, 0.10, len, 0.06, 0, 0, 0);
+      hd.position.set(Math.sin(ang)*len*0.5, PL+colH+5.1 + Math.cos(ang)*len*0.5, pz+3.0);
+      hd.rotation.z = -ang;
+    }
+  }
+  // doorway recess (the opening the player walks through)
+  hbox(g, HM.wood, 7.2, 8.4, 0.5, 0, PL + 4.2, D*0.5 - 0.05);
+  hbox(g, HM.brass, 0.28, 8.4, 0.7, 0, PL + 4.2, D*0.5 - 0.02);
+
+  // rotunda drum, dome, lantern
+  const drumY = PL + H + 2.8;
+  hcyl(g, HM.stone, 9.4, 9.8, 11, 28, 0, drumY + 5.5, 0);
+  for(let i=0;i<16;i++){
+    const a = i/16*Math.PI*2;
+    hcyl(g, HM.stoneT, 0.42, 0.46, 9.4, 8, Math.cos(a)*9.9, drumY + 5.2, Math.sin(a)*9.9);
+  }
+  hcyl(g, HM.stoneT, 10.6, 10.2, 1.1, 28, 0, drumY + 11.5, 0);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(9.9, 30, 16, 0, Math.PI*2, 0, Math.PI*0.5), HM.stoneT);
+  dome.position.set(0, drumY + 11.9, 0);
+  dome.castShadow = true; dome.receiveShadow = true; g.add(dome);
+  for(let i=0;i<20;i++){          // dome ribs
+    const a = i/20*Math.PI*2;
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(9.95, 0.13, 6, 20, Math.PI*0.5), HM.stone);
+    rib.position.set(0, drumY + 11.9, 0); rib.rotation.set(0, a, 0);
+    rib.rotateX(Math.PI*0.5); g.add(rib);
+  }
+  hcyl(g, HM.stoneT, 2.3, 2.9, 3.4, 14, 0, drumY + 22.6, 0);
+  hcyl(g, HM.brass,  0.0, 2.5, 2.6, 14, 0, drumY + 25.6, 0);
+  const finial = new THREE.Mesh(new THREE.SphereGeometry(0.85, 12, 10), HM.brass);
+  finial.position.set(0, drumY + 27.3, 0); g.add(finial);
+  HALL.roofY = drumY;                     // where rooftop access lets out
+  HALL.domeTop = drumY + 28;
+
+  // dramatic uplighting — grouped so it only costs shader slots when close
+  cityScene.add(hallLights);
+  for(const cx of [-13, -4.5, 4.5, 13]){
+    const up = new THREE.SpotLight(0xffdcaa, 620, 44, 0.60, 0.82, 2);
+    up.position.set(HALL.x + cx, PL + 0.4, HALL.z + D*0.5 + 4.6);
+    up.target.position.set(HALL.x + cx*0.8, PL + colH + 3.5, HALL.z + D*0.5 + 1.5);
+    hallLights.add(up, up.target);
+    const fix = new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.3,0.34,10), HM.brass);
+    fix.position.set(HALL.x + cx, PL + 0.35, HALL.z + D*0.5 + 4.6); hallGroup.add(fix);
+    fix.position.sub(new THREE.Vector3(HALL.x, 0, HALL.z));
+  }
+  for(const sx of [-1, 1]){
+    const wing = new THREE.SpotLight(0xffd0a0, 420, 54, 0.50, 0.85, 2);
+    wing.position.set(HALL.x + sx*26, PL + 0.4, HALL.z + D*0.5 + 3.0);
+    wing.target.position.set(HALL.x + sx*24, PL + H*0.8, HALL.z);
+    hallLights.add(wing, wing.target);
+  }
+  for(const sz of [1, -1]){
+    const dl = new THREE.SpotLight(0xdce8ff, 900, 70, 0.46, 0.85, 2);
+    dl.position.set(HALL.x, PL + H + 2.2, HALL.z + sz*(D*0.5 - 3));
+    dl.target.position.set(HALL.x, drumY + 15, HALL.z);
+    hallLights.add(dl, dl.target);
+  }
+
+  cityColliders.push({x:HALL.x, z:HALL.z, hw:W*0.5, hd:D*0.5, top:PL+H});
+  cityRoofs.push({x:HALL.x, y:PL+H+2.6, z:HALL.z, w:W*0.7, d:D*0.7});
+})();
+
+const hallShafts = [];
+
+/* ══ interior ══════════════════════════════════════════════════════════════ */
+const HALL_ROOMS = [];      // walkable volumes, handed to collision in stage 6
+(function hallInteriorBuild(){
+  const g = hallInterior;
+  g.position.set(HALL.x, 0, HALL.z);
+  const F = HALL.plinth;                    // finished floor level
+  const W = HALL.w, D = HALL.d;
+  const MEZ = F + 7.2;                      // mezzanine level
+
+  const room = (name, x0,x1, z0,z1, y, h)=>{
+    HALL_ROOMS.push({name, x0:HALL.x+x0, x1:HALL.x+x1, z0:HALL.z+z0, z1:HALL.z+z1, y, h});
+  };
+
+  /* ---------- grand lobby ---------- */
+  const lob = { x:26, z:17, h:13.4 };
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(lob.x, lob.z), HM.marble);
+  floor.rotation.x = -Math.PI/2; floor.position.set(0, F+0.01, D*0.5 - lob.z*0.5 - 0.6);
+  floor.receiveShadow = true; g.add(floor);
+  room('lobby', -lob.x/2, lob.x/2, D*0.5-lob.z-0.6, D*0.5-0.6, F, lob.h);
+
+  // city seal inlaid in the floor
+  const seal = new THREE.Mesh(new THREE.CircleGeometry(3.4, 40), HM.brass);
+  seal.rotation.x = -Math.PI/2; seal.position.set(0, F+0.02, D*0.5 - 6.5); g.add(seal);
+  const sealIn = new THREE.Mesh(new THREE.CircleGeometry(2.6, 40), HM.stoneT);
+  sealIn.rotation.x = -Math.PI/2; sealIn.position.set(0, F+0.03, D*0.5 - 6.5); g.add(sealIn);
+  for(let i=0;i<14;i++){
+    const a = i/14*Math.PI*2;
+    hbox(g, HM.brass, 0.3, 0.04, 1.0, Math.cos(a)*2.0, F+0.04, D*0.5-6.5+Math.sin(a)*2.0, 0, -a, 0, false);
+  }
+  // ceiling, walls, interior colonnade
+  hbox(g, HM.stoneT, lob.x, 0.6, lob.z, 0, F+lob.h, D*0.5-lob.z*0.5-0.6, 0,0,0, false);
+  for(const sx of [-1,1]){
+    hbox(g, HM.stone, 0.8, lob.h, lob.z, sx*lob.x*0.5, F+lob.h*0.5, D*0.5-lob.z*0.5-0.6);
+    for(let i=0;i<4;i++)
+      column(g, sx*(lob.x*0.5-2.4), D*0.5 - 3.5 - i*3.6, 8.4, 0.62);
+  }
+  // front wall with the door opening
+  for(const [ox,ww] of [[-9.6, 6.8],[9.6, 6.8]])
+    hbox(g, HM.stone, ww, lob.h, 0.8, ox, F+lob.h*0.5, D*0.5-0.4);
+  hbox(g, HM.stone, 7.2, lob.h-8.6, 0.8, 0, F+8.6+(lob.h-8.6)*0.5, D*0.5-0.4);
+
+  /* ---------- grand staircase, splitting left and right ---------- */
+  const stairZ = D*0.5 - lob.z + 1.2;
+  for(let i=0;i<14;i++){                        // central flight up to a landing
+    hbox(g, HM.marble, 9.0, 0.26, 0.62, 0, F+0.13+i*0.26, stairZ + 4.6 - i*0.62);
+  }
+  hbox(g, HM.marble, 9.0, 0.3, 2.4, 0, F+3.64, stairZ - 0.1);
+  for(const sx of [-1,1]) for(let i=0;i<14;i++){   // side flights up to the mezzanine
+    hbox(g, HM.marble, 0.62, 0.26, 4.4, sx*(4.5 + i*0.62), F+3.9+i*0.26, stairZ - 0.9);
+  }
+  for(const sx of [-1,1]){                         // balustrades
+    for(let i=0;i<15;i++)
+      hcyl(g, HM.brass, 0.06,0.06, 1.0, 6, sx*(4.5+i*0.62), F+4.4+i*0.26, stairZ+1.2, false);
+    const rail = hbox(g, HM.brass, 0.10, 0.10, 1.0, 0,0,0, 0,0,0, false);
+    rail.geometry.dispose();
+    rail.geometry = new THREE.BoxGeometry(9.6, 0.12, 0.12);
+    rail.position.set(sx*9.3, F+8.0, stairZ+1.2); rail.rotation.z = sx*0.40;
+  }
+  // mezzanine deck
+  for(const sx of [-1,1])
+    hbox(g, HM.marble, 8.4, 0.4, 9.0, sx*(lob.x*0.5-4.2), MEZ, D*0.5-lob.z*0.5-0.6);
+  room('mezzanine', -lob.x/2, lob.x/2, D*0.5-lob.z-0.6, D*0.5-0.6, MEZ+0.2, 6.0);
+
+  /* ---------- chandeliers ---------- */
+  for(const cz of [D*0.5-4.2, D*0.5-9.4, D*0.5-14.2]){
+    const ch = new THREE.Group(); ch.position.set(0, F+lob.h-2.6, cz); g.add(ch);
+    hcyl(ch, HM.brass, 0.05,0.05, 2.4, 6, 0, 1.6, 0, false);
+    hcyl(ch, HM.brass, 1.5, 1.7, 0.16, 18, 0, 0, 0, false);
+    hcyl(ch, HM.brass, 0.9, 1.1, 0.14, 18, 0, 0.55, 0, false);
+    for(let i=0;i<10;i++){
+      const a = i/10*Math.PI*2;
+      const b = new THREE.Mesh(new THREE.SphereGeometry(0.17, 8, 6), HM.bulb);
+      b.position.set(Math.cos(a)*1.6, 0.14, Math.sin(a)*1.6); ch.add(b);
+    }
+    const pl = new THREE.PointLight(0xffd2a0, 60, 22, 2);
+    pl.position.set(0, -0.4, 0); pl.castShadow = false; ch.add(pl);
+  }
+
+  /* ---------- main corridor ---------- */
+  const corZ = -4.1, corH = 5.2;
+  hbox(g, HM.marble, 34, 0.3, 5.0, 0, F, corZ, 0,0,0, false);
+  hbox(g, HM.stoneT, 34, 0.5, 5.0, 0, F+corH, corZ, 0,0,0, false);
+  room('corridor', -17, 17, corZ-2.5, corZ+2.5, F, corH);
+  for(const sz of [-1,1]) hbox(g, HM.stone, 34, corH, 0.5, 0, F+corH*0.5, corZ+sz*2.5);
+  for(let i=0;i<10;i++){
+    const dx = -15 + i*3.4;
+    if(Math.abs(dx) < 3) continue;
+    for(const sz of [-1,1]){
+      hbox(g, HM.wood, 1.5, 2.6, 0.16, dx, F+1.3, corZ+sz*2.42, 0,0,0, false);
+      hcyl(g, HM.brass, 0.07,0.07,0.2, 8, dx+0.55, F+1.25, corZ+sz*2.32, false);
+      const sc = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), HM.bulb);
+      sc.position.set(dx+1.7, F+3.3, corZ+sz*2.3); g.add(sc);
+    }
+    if(i % 3 === 1){
+      const pl = new THREE.PointLight(0xffc890, 22, 11, 2);
+      pl.position.set(dx+1.7, F+3.3, corZ); g.add(pl);
+    }
+  }
+  hbox(g, HM.carpet, 3.2, 0.04, 5.0, 0, F+0.32, corZ, 0,0,0, false);
+
+  /* ---------- council chamber ---------- */
+  const chZ = -11.1, chH = 9.6;
+  hbox(g, HM.wood2, 26, 0.3, 9, -2, F, chZ, 0,0,0, false);
+  hbox(g, HM.stoneT, 26, 0.5, 9, -2, F+chH, chZ, 0,0,0, false);
+  room('council', -15, 11, chZ-4.5, chZ+4.5, F, chH);
+  hbox(g, HM.stone, 0.6, chH, 9, -15, F+chH*0.5, chZ);
+  hbox(g, HM.stone, 0.6, chH, 9,  11, F+chH*0.5, chZ);
+  // tiered desks facing a podium
+  for(let t=0;t<3;t++){
+    const rz = chZ + 0.2 + t*2.0, ry = F + t*0.75;
+    hbox(g, HM.stoneT, 20 - t*1.5, 0.75, 2.3, -2, ry+0.375, rz, 0,0,0, false);
+    hbox(g, HM.wood, 19 - t*1.5, 0.9, 0.7, -2, ry+1.2, rz-0.7);
+    for(let s=0;s<6-t;s++){
+      const sxp = -2 + (s - (5-t)/2)*3.0;
+      hbox(g, HM.leather, 0.62, 0.72, 0.6, sxp, ry+1.11, rz+0.5, 0,0,0, false);
+      hbox(g, HM.leather, 0.62, 0.10, 0.62, sxp, ry+0.80, rz+0.2, 0,0,0, false);
+    }
+  }
+  hbox(g, HM.stoneT, 3.6, 1.15, 1.6, -2, F+0.58, chZ - 3.0);
+  hbox(g, HM.wood, 3.2, 0.14, 1.3, -2, F+1.2, chZ - 3.0);
+  hcyl(g, HM.brass, 0.04,0.04,0.5, 6, -2, F+1.45, chZ-3.3, false);
+  // tall windows on the rear wall, with shafts of city light coming through
+  for(let i=0;i<4;i++){
+    const wx = -11 + i*6.0;
+    hbox(g, HM.glass, 3.2, 6.4, 0.25, wx, F+4.6, -D*0.5+0.35, 0,0,0, false);
+    for(const sx2 of [-1,1])
+      hbox(g, HM.stoneT, 0.5, 7.0, 0.5, wx+sx2*1.85, F+4.6, -D*0.5+0.4);
+    hbox(g, HM.stoneT, 4.2, 0.5, 0.6, wx, F+8.1, -D*0.5+0.4);
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(3.0, 6.0, 9.5),
+                                 ShaftMat(0xbcd0ff, 0.30, 1.2));
+    shaft.position.set(wx, F+4.4, -D*0.5+5.4);
+    shaft.rotation.x = 0.34; shaft.renderOrder = 6; g.add(shaft);
+    hallShafts.push(shaft);
+  }
+  const chLight = new THREE.PointLight(0xbcd0ff, 90, 30, 2);
+  chLight.position.set(-2, F+7.4, chZ - 1.5); g.add(chLight);
+  const chWarm = new THREE.PointLight(0xffc890, 40, 20, 2);
+  chWarm.position.set(-2, F+3.2, chZ - 4.0); g.add(chWarm);
+
+  /* ---------- mayor's office, off the mezzanine ---------- */
+  const oX = 14.5, oZ = -2.0, oH = 4.6;
+  hbox(g, HM.wood2, 12, 0.3, 8, oX, MEZ+0.2, oZ, 0,0,0, false);
+  hbox(g, HM.stoneT, 12, 0.4, 8, oX, MEZ+0.2+oH, oZ, 0,0,0, false);
+  room('mayor', oX-6, oX+6, oZ-4, oZ+4, MEZ+0.2, oH);
+  hbox(g, HM.stone, 0.5, oH, 8, oX-6, MEZ+0.2+oH*0.5, oZ);
+  hbox(g, HM.stone, 12, oH, 0.5, oX, MEZ+0.2+oH*0.5, oZ+4);
+  hbox(g, HM.wood, 1.5, 2.5, 0.16, oX-5.9, MEZ+1.45, oZ+1.4, 0,0,0, false);
+  // window overlooking the city
+  hbox(g, HM.glass, 0.2, 2.8, 6.0, oX+5.9, MEZ+2.4, oZ, 0,0,0, false);
+  hbox(g, HM.stoneT, 0.4, 0.4, 6.4, oX+5.9, MEZ+3.9, oZ, 0,0,0, false);
+  // desk, chair, bookshelves, lamp
+  hbox(g, HM.wood, 3.2, 0.16, 1.7, oX, MEZ+0.95, oZ-1.4);
+  for(const sx2 of [-1,1]) hbox(g, HM.wood, 0.24, 0.78, 1.5, oX+sx2*1.4, MEZ+0.56, oZ-1.4);
+  hbox(g, HM.leather, 0.8, 0.9, 0.75, oX, MEZ+0.75, oZ-2.7);
+  hbox(g, HM.leather, 0.8, 0.12, 0.8, oX, MEZ+0.44, oZ-2.35, 0,0,0, false);
+  for(let i=0;i<3;i++){
+    hbox(g, HM.wood2, 4.4, 0.16, 0.9, oX-3.4, MEZ+1.3+i*1.0, oZ+3.4);
+    for(let b=0;b<12;b++)
+      hbox(g, HM.carpet, 0.22+rand()*0.14, 0.6+rand()*0.22, 0.7,
+           oX-5.4+b*0.36, MEZ+1.7+i*1.0, oZ+3.4, 0,0,0, false);
+  }
+  const deskLamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), HM.bulb);
+  deskLamp.position.set(oX+1.1, MEZ+1.25, oZ-1.2); g.add(deskLamp);
+  const oL = new THREE.PointLight(0xffcf96, 26, 12, 2);
+  oL.position.set(oX+1.1, MEZ+1.5, oZ-1.2); g.add(oL);
+  const oL2 = new THREE.PointLight(0xbcd0ff, 16, 12, 2);
+  oL2.position.set(oX+4.5, MEZ+2.6, oZ); g.add(oL2);
+
+  /* ---------- stairwell up to the roof ---------- */
+  const sX = -17.5, sZ = 2.0;
+  room('stairwell', sX-3, sX+3, sZ-3.5, sZ+3.5, MEZ+0.2, HALL.h - 7.0);
+  for(let i=0;i<26;i++){
+    const a = i*0.42, rr2 = 2.1;
+    hbox(g, HM.stoneT, 2.2, 0.22, 0.95,
+         sX + Math.cos(a)*rr2*0.5, MEZ+0.4+i*0.46, sZ + Math.sin(a)*rr2*0.5, 0, -a, 0, false);
+  }
+  hcyl(g, HM.brass, 0.16,0.16, 12.4, 8, sX, MEZ+6.4, sZ, false);
+  const sl = new THREE.PointLight(0xffc890, 22, 14, 2);
+  sl.position.set(sX, MEZ+6.0, sZ); g.add(sl);
+  // roof house the stair lets out into
+  hbox(hallGroup, HM.stone, 6.4, 3.6, 6.4, sX, HALL.plinth + HALL.h + 1.8, sZ);
+  hbox(hallGroup, HM.wood, 1.6, 2.4, 0.2, sX, HALL.plinth + HALL.h + 1.2, sZ + 3.2, 0,0,0, false);
+  HALL.roofDoor = { x: HALL.x + sX, y: HALL.plinth + HALL.h, z: HALL.z + sZ + 3.4 };
+
+  console.info('[gotham] city hall:', HALL_ROOMS.length, 'rooms,',
+               g.children.length, 'interior objects');
+})();
+
 window.GOTHAM = {
   get act(){ return ACT; }, setAct:(a)=>setAct(a),
   scene:()=>cityScene, cam:()=>cityCam, CITY,
-  roofs:()=>cityRoofs, colliders:()=>cityColliders,
+  roofs:()=>cityRoofs, colliders:()=>cityColliders, HALL, rooms:()=>HALL_ROOMS,
   view(p, look){ cityCam.position.set(p[0],p[1],p[2]);
     if(look){ const d=new THREE.Vector3(look[0]-p[0],look[1]-p[1],look[2]-p[2]).normalize();
       fly.yaw = Math.atan2(d.x, d.z); fly.pitch = Math.asin(clamp(d.y,-1,1)); }
