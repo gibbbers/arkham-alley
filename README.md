@@ -60,3 +60,37 @@ fallback (drop to 1×, then disable AO and DOF) if the frame rate sags.
 `ALLEY.seek(10.26)` in the console jumps to any moment — that one is the first
 counter landing. `ALLEY.scene`, `ALLEY.camera`, `ALLEY.batman`, `ALLEY.crooks`
 and `ALLEY.audio` are exposed too.
+
+---
+
+## `city/` — open-world Gotham (in progress)
+
+`city/index.html` is a fork of the cutscene that grows a playable open world
+onto the same rendering foundation. One renderer, one `EffectComposer`, one
+post stack — the city scene is swapped onto the same `RenderPass` / `GTAOPass`
+/ `BokehPass` objects, so it cannot visually diverge from the cutscene.
+
+```bash
+python3 -m http.server 8100 --directory city
+```
+
+`?act=city` boots straight into the world; **G** toggles between the cutscene
+and the city. Fly with **WASD**, drag to look, **Shift** to boost.
+
+**Built so far**
+
+- Night sky with a real-radius moon, stars, camera-anchored dome, and haze-
+  matched fog. Wet asphalt with a 70m puddle mirror that rides the camera.
+- 20×20 blocks at 74m pitch — **1480m across**, roughly 50–60s to cross by
+  chained swing. 469 rooftops, 304 of them above 90m.
+- Windows are baked into procedural facade textures with emissive maps rather
+  than built as geometry: ~12 draw calls instead of ~40,000.
+- Ten facade variants (dark brick, soot concrete, pale limestone, ribbon-glazed
+  glass) and archetypes for slabs, art-deco setbacks, twin-mass lots, tapered
+  glass towers, round/octagonal towers and gothic twin-spire halls.
+- Every other block is forced to carry a tall mass, so there is always another
+  high roof within grapple range — verified: zero orphaned rooftops at 120m.
+
+**Still to come:** ground-level life (traffic, stoplights, pedestrians, parking
+lots, a basketball court), City Hall with a full interior, player traversal
+(momentum swing, glide, dive, falling POV), and the cutscene→gameplay handoff.
