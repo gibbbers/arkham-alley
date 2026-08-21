@@ -2611,7 +2611,7 @@ function frame(dtReal){
     fadeEl.style.opacity = '0';              // the CSS blackout starts opaque
     titleEl.style.opacity = '0';
     grade.uniforms.uTime.value  = elapsed;
-    grade.uniforms.uFade.value  = cityFadeIn > 0 ? easeOut(cityFadeIn/0.9) : 0;
+    grade.uniforms.uFade.value  = cityFadeIn > 0 ? easeOut(cityFadeIn/0.55) : 0;
     grade.uniforms.uPunch.value = FX.punch;
     grade.uniforms.uFlash.value = FX.flash;
     composer.render();
@@ -2730,8 +2730,8 @@ function frame(dtReal){
   else if(t > LOOP-1.6)   fade = easeOut((t-(LOOP-1.6))/1.6);
   /* the Joker's laugh plays out, the camera pulls back, and we cut to the
      open world rather than looping the scene */
-  if(started && !handedOff && elapsed >= LOOP - 0.85){
-    handedOff = true; setAct('city'); spawnPlayer(); cityFadeIn = 0.9;
+  if(started && !handedOff && elapsed >= LOOP - 0.50){
+    handedOff = true; setAct('city'); spawnPlayer(); cityFadeIn = 0.55;
     startMission();                       // the alert is up before the fade clears
   }
   updateAudio(t, dtReal);
@@ -4889,6 +4889,9 @@ const HALL_ROOMS = [];      // walkable volumes, handed to collision in stage 6
    ══════════════════════════════════════════════════════════════════════════ */
 const SITE_S = 1.5;              // every site except City Hall, which has its own
 const PRISON_S = 2.4;
+/* The school is the mission building — you fight inside it — so it is built
+   at its own, larger scale rather than the generic site scale. */
+const SCHOOL_S = 2.4;
 const SITE_PED_IMS = [];
 const sitePeople = [];       // {x,z,r,sp,ph,mat,mode}
 const siteGroups = [];       // {group, x, z, near}  — gated by distance
@@ -5152,7 +5155,7 @@ function buildCourt(cx, cz){
 
 /* ---- school -------------------------------------------------------------- */
 function buildSchool(cx, cz){
-  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SCHOOL_S); cityScene.add(g);
   sbox(g, SM.conc, 50, 0.30, 40, 0, 0.15, 0, 0, false);
   const W=40, D=16, FL=4.4, N=3;
   sbox(g, SM.brickS, W, FL*N, D, 0, FL*N/2 + 0.3, -4);
@@ -5176,7 +5179,7 @@ function buildSchool(cx, cz){
   for(const bx of [-14, 0, 14]) sbox(g, SM.bench, 2.4, 0.14, 0.7, bx, 0.75, 11, 0);
   for(const [fx,fz] of [[-18,10],[18,10]]) floodPole(g, fx, fz, 0, 2, 8.0);
   for(let i=0;i<11;i++)
-    sitePeople.push({ x:cx+rr(-20,20)*SITE_S, z:cz+rr(4,14)*SITE_S, r:rr(1.5,5),
+    sitePeople.push({ x:cx+rr(-20,20)*SCHOOL_S, z:cz+rr(4,14)*SCHOOL_S, r:rr(1.5,5),
                       sp:rr(0.5,1.4), ph:rand()*6.28, mat:SCHOOLKID[(rand()*4)|0] });
   /* ---- second floor: corridor along the window wall, classrooms behind ----
      The break-in pane is one of the front windows, so the room you land in is
@@ -5184,7 +5187,7 @@ function buildSchool(cx, cz){
   {
     const IN = makeInterior(g, cx, cz, 70);
     const FY = 0.3 + FL;                     // slab this storey sits on
-    const CH = 3.4;                          // clear height, ~5m at site scale
+    const CH = 4.3;                          // clear height — ~10m once scaled
     const X0 = -18, X1 = 18, ZB = -11, ZF = 3.6;
     const CORZ = 2.2;                        // corridor centre line
     const f = new THREE.Group(); f.position.y = FY; IN.add(f);
@@ -5236,10 +5239,10 @@ function buildSchool(cx, cz){
     for(const sx of [-1,1]) sbox(g, SM.conc, 0.22, 2.6, 0.34, WX + sx*1.3, WY, WZ + 0.16, 0, false);
     addWindow(g, pane, {
       name:'SCHOOL', w:2.4, h:2.4, interior:IN,
-      inside:{ x:cx + WX*SITE_S, y:FY*SITE_S + 0.18*SITE_S, z:cz + CORZ*SITE_S },
-      room:{ x0:cx + (X0+0.8)*SITE_S, x1:cx + (X1-0.8)*SITE_S,
-             z0:cz + (ZB+0.8)*SITE_S, z1:cz + (ZF-0.6)*SITE_S,
-             y:(FY + 0.18)*SITE_S, ceil:(FY + CH - 0.4)*SITE_S }
+      inside:{ x:cx + WX*SCHOOL_S, y:FY*SCHOOL_S + 0.18*SCHOOL_S, z:cz + CORZ*SCHOOL_S },
+      room:{ x0:cx + (X0+0.8)*SCHOOL_S, x1:cx + (X1-0.8)*SCHOOL_S,
+             z0:cz + (ZB+0.8)*SCHOOL_S, z1:cz + (ZF-0.6)*SCHOOL_S,
+             y:(FY + 0.18)*SCHOOL_S, ceil:(FY + CH - 0.4)*SCHOOL_S }
     });
     schoolRooms.push({ g:f, cx, cz, FY, CORZ, X0, X1, ZB, mid:rooms[1], interior:IN });
     compactGroup(IN);
@@ -6872,8 +6875,6 @@ function buildBeacon(x, z){
   shell.position.y = H/2 + 26; g.add(shell);
   const pin = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.9, H, 12, 1, true), core);
   pin.position.y = H/2 + 26; g.add(pin);
-  const lamp = new THREE.PointLight(0xffd23a, 2600, 150, 2);
-  lamp.position.y = 34; g.add(lamp);
   g.userData.shell = shell; g.userData.pin = pin;
   return g;
 }
@@ -6950,7 +6951,7 @@ function buildKid(mat){
 function buildMissionSet(){
   if(MSET.group) return;
   const S = MISSION.school;
-  const SX = S.x, SZ = S.z + 8.55*SITE_S;              // the entrance glass
+  const SX = S.x, SZ = S.z + 8.55*SCHOOL_S;             // the entrance glass
   const GY = groundAt(SX, SZ + 6, 3);
   MSET.origin = { x:SX, y:GY, z:SZ };
   MSET.ground = GY;
@@ -6962,27 +6963,45 @@ function buildMissionSet(){
   const dm = new THREE.MeshStandardMaterial({ color:0x4b3a26, roughness:0.62,
                metalness:0.12, envMapIntensity:0.7 });
   for(const sx of [-1,1]){
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(1.55, 3.3, 0.14), dm);
-    leaf.position.set(sx*0.80, 1.65, 0); leaf.castShadow = true; door.add(leaf);
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,1.0,8), INT.metal);
-    bar.rotation.z = Math.PI/2; bar.position.set(sx*0.35, 1.55, 0.10); door.add(bar);
-    const glass = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.15, 0.03), GLASS_MAT);
-    glass.position.set(sx*0.80, 2.35, 0.07); door.add(glass);
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(2.35, 5.0, 0.18), dm);
+    leaf.position.set(sx*1.20, 2.50, 0); leaf.castShadow = true; door.add(leaf);
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,1.5,8), INT.metal);
+    bar.rotation.z = Math.PI/2; bar.position.set(sx*0.55, 2.30, 0.13); door.add(bar);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.9, 0.04), GLASS_MAT);
+    glass.position.set(sx*1.20, 3.55, 0.09); door.add(glass);
   }
   MSET.door = door;
 
-  // four kids roped to the wall on either side of the doors
+  /* Four roped to the wall beside the doors. They sit just PROUD of the
+     entrance face — the previous pass put them a third of a metre inside it,
+     so they read as loose kids standing near a wall rather than tied to it. */
   const kidMats = SCHOOLKID;
+  const WALLZ = SZ - 0.15;                       // the entrance elevation
+  // a post-and-rail the ropes visibly run to, so the tethering is legible
+  for(const sx of [-1,1]){
+    scyl(g, INT.metal, 0.10,0.12, 2.6, 8, SX + sx*3.0, GY + 1.3, WALLZ + 0.55, false);
+    scyl(g, INT.metal, 0.10,0.12, 2.6, 8, SX + sx*8.4, GY + 1.3, WALLZ + 0.55, false);
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,5.4,8), INT.metal);
+    rail.rotation.z = Math.PI/2;
+    rail.position.set(SX + sx*5.7, GY + 1.75, WALLZ + 0.55); g.add(rail);
+  }
   for(let i=0;i<4;i++){
     const sx = i < 2 ? -1 : 1;
-    const kx = SX + sx*(2.9 + (i%2)*2.2);
+    const kx = SX + sx*(4.1 + (i%2)*2.9);
     const k = buildKid(kidMats[i % kidMats.length]);
-    k.position.set(kx, GY, SZ - 0.35);
-    k.rotation.y = Math.PI;
+    k.position.set(kx, GY, WALLZ + 0.52);
+    k.rotation.y = 0;                             // facing out, back to the wall
+    // arms hauled back behind them and lashed
+    if(k.userData.armL){ k.userData.armL.rotation.x = 0.95; k.userData.armL.position.z = -0.16; }
+    if(k.userData.armR){ k.userData.armR.rotation.x = 0.95; k.userData.armR.position.z = -0.16; }
     g.add(k);
-    for(const ry of [0.62, 1.02]){                     // rope bands across the chest
-      const r = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.035, 5, 12), CLOWN.rope);
-      r.position.set(kx, GY + ry, SZ - 0.35); r.rotation.x = Math.PI/2; g.add(r);
+    for(const ry of [0.58, 0.96]){                // bands round chest and waist
+      const r = new THREE.Mesh(new THREE.TorusGeometry(0.30, 0.055, 6, 14), CLOWN.rope);
+      r.position.set(kx, GY + ry, WALLZ + 0.52); r.rotation.x = Math.PI/2; g.add(r);
+      // and the length of rope running back to the rail
+      const tie = new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.045,0.62,6), CLOWN.rope);
+      tie.rotation.x = Math.PI/2;
+      tie.position.set(kx, GY + ry + 0.18, WALLZ + 0.36); g.add(tie);
     }
     MSET.tied.push(k);
   }
@@ -6991,31 +7010,53 @@ function buildMissionSet(){
   for(let i=0;i<5;i++){
     const k = buildKid(kidMats[(i+1) % kidMats.length]);
     const a = -0.9 + i*0.45;
-    k.position.set(SX + Math.sin(a)*5.5, GY, SZ + 5.0 + Math.cos(a)*2.4);
+    k.position.set(SX + Math.sin(a)*9.5, GY, SZ + 8.5 + Math.cos(a)*4.0);
     g.add(k);
-    MSET.panic.push({ k, r: 2.0 + (i%3)*0.9, sp: 1.5 + (i%4)*0.35, ph: i*1.3,
-                      cx: SX + Math.sin(a)*5.0, cz: SZ + 6.2 + (i%2)*1.6 });
+    MSET.panic.push({ k, r: 3.2 + (i%3)*1.5, sp: 1.5 + (i%4)*0.35, ph: i*1.3,
+                      cx: SX + Math.sin(a)*8.5, cz: SZ + 10.0 + (i%2)*2.8 });
   }
 
   /* the entrance hall the doors open onto. Without this the three are stood
      inside the solid facade mass and the reveal shot looks through them at
      the street beyond. */
   {
-    const HW = 6.4, HD = 13.0, HH = 4.3, hz = SZ - HD/2 - 0.6;
+    /* You fight in here, so it is sized as a room you can move around in
+       rather than a vestibule — you could sprint the old one end to end in
+       about two seconds. */
+    const HW = 15.0, HD = 34.0, HH = 8.6, hz = SZ - HD/2 - 0.6;
     sbox(g, INT.lino, HW*2, 0.2, HD, SX, GY + 0.1, hz, 0, false);
     sbox(g, INT.ceil, HW*2, 0.2, HD, SX, GY + HH, hz, 0, false);
     sbox(g, INT.wall, HW*2, HH, 0.3, SX, GY + HH/2, hz - HD/2, 0, false);
     for(const sx of [-1,1])
       sbox(g, INT.wall, 0.3, HH, HD, SX + sx*HW, GY + HH/2, hz, 0, false);
-    const hallStrip = INT.strip.clone(); hallStrip.emissiveIntensity = 1.5;
-    for(let i=0;i<3;i++)
-      sbox(g, hallStrip, 3.0, 0.10, 0.5, SX, GY + HH - 0.16, hz - HD/2 + 3.0 + i*3.6, 0, false);
+    const hallStrip = INT.strip.clone(); hallStrip.emissiveIntensity = 1.9;
+    for(let i=0;i<6;i++) for(const sx of [-1,1])
+      sbox(g, hallStrip, 4.2, 0.12, 0.6, SX + sx*5.2, GY + HH - 0.2,
+           hz - HD/2 + 4.0 + i*5.2, 0, false);
     // lockers and a trophy case so it reads as a school, not a corridor
-    for(let i=0;i<7;i++){
-      sbox(g, INT.locker, 1.5, 2.0, 0.45, SX - HW + 0.5, GY + 1.1, hz - HD/2 + 1.6 + i*1.7, 0, false);
-      sbox(g, INT.locker, 1.5, 2.0, 0.45, SX + HW - 0.5, GY + 1.1, hz - HD/2 + 1.6 + i*1.7, 0, false);
+    for(let i=0;i<16;i++){
+      const lz = hz - HD/2 + 2.0 + i*1.9;
+      sbox(g, INT.locker, 1.7, 2.3, 0.5, SX - HW + 0.55, GY + 1.25, lz, 0, false);
+      sbox(g, INT.locker, 1.7, 2.3, 0.5, SX + HW - 0.55, GY + 1.25, lz, 0, false);
     }
-    sbox(g, INT.board, 5.0, 1.6, 0.10, SX, GY + 2.2, hz - HD/2 + 0.22, 0, false);
+    sbox(g, INT.board, 7.0, 2.2, 0.12, SX, GY + 2.8, hz - HD/2 + 0.24, 0, false);
+    /* Front elevation with the doorway punched out of it. Without this the
+       hall is 30m wide behind a 5m pair of doors and you simply see into it
+       from the forecourt. */
+    const OPW = 2.9, OPH = 5.4, fz = SZ - 0.15;
+    for(const sx of [-1,1])
+      sbox(g, SM.brickS, HW - OPW, HH, 0.6, SX + sx*(OPW + (HW-OPW)/2), GY + HH/2, fz, 0, false);
+    sbox(g, SM.brickS, OPW*2, HH - OPH, 0.6, SX, GY + OPH + (HH-OPH)/2, fz, 0, false);
+    // a lit sign over the doors
+    sbox(g, SM.conc, OPW*2 + 1.4, 1.3, 0.35, SX, GY + OPH + 1.0, fz + 0.4, 0, false);
+    { const nm = new THREE.MeshStandardMaterial({ color:0x1a1206, emissive:0xffc27a,
+                   emissiveIntensity:2.2, roughness:0.4 });
+      sbox(g, nm, OPW*2 + 0.2, 0.75, 0.14, SX, GY + OPH + 1.0, fz + 0.60, 0, false); }
+    // columns down the hall so the space reads at its real size
+    for(const sx of [-1,1]) for(let i=0;i<4;i++)
+      sbox(g, INT.wall, 1.0, HH, 1.0, SX + sx*(HW-4.2), GY + HH/2, hz - HD/2 + 5.0 + i*7.6, 0, false);
+    // a mezzanine rail along the back so the height has something to measure against
+    sbox(g, INT.metal, HW*2-2, 0.18, 0.3, SX, GY + HH*0.62, hz - HD/2 + 1.2, 0, false);
     MSET.hall = { x:SX, z0:hz - HD/2 + 0.9, z1:SZ - 0.9, hw:HW - 0.9, y:GY + 0.2 };
   }
 
@@ -7023,23 +7064,23 @@ function buildMissionSet(){
   const suits = [CLOWN.suit, CLOWN.suit2, CLOWN.suit3];
   for(let i=0;i<3;i++){
     const h = buildGoon(suits[i]);
-    h.root.position.set(SX + (i-1)*2.0, GY + 0.2, SZ - 4.6);
+    h.root.position.set(SX + (i-1)*3.0, GY + 0.2, SZ - 9.5);
     h.root.rotation.y = 0;                              // facing the doors
     g.add(h.root);
     MSET.goons.push(h);
   }
 
   // a warmer key on the entrance so the scene is lit, not just visible
-  const key = new THREE.SpotLight(0xffe0b0, 130, 40, 0.7, 0.6, 2);
-  key.position.set(SX + 3, GY + 9, SZ + 9); key.target.position.set(SX, GY + 1.5, SZ);
+  const key = new THREE.SpotLight(0xffe0b0, 210, 60, 0.75, 0.6, 2);
+  key.position.set(SX + 6, GY + 14, SZ + 15); key.target.position.set(SX, GY + 1.8, SZ + 2);
   g.add(key, key.target);
-  const fill = new THREE.PointLight(0x9fb8e8, 42, 26, 2);
-  fill.position.set(SX - 4, GY + 4, SZ + 6); g.add(fill);
+  const fill = new THREE.PointLight(0x9fb8e8, 70, 40, 2);
+  fill.position.set(SX - 7, GY + 6, SZ + 10); g.add(fill);
   const inner = new THREE.PointLight(0xffc27a, 58, 22, 2);
-  inner.position.set(SX, GY + 3.4, SZ - 4.2); g.add(inner);
+  inner.position.set(SX, GY + 4.6, SZ - 8.5); g.add(inner);
   const back = new THREE.SpotLight(0xffd9a0, 90, 26, 0.8, 0.7, 2);
-  back.position.set(SX, GY + 3.9, SZ - 10.5);
-  back.target.position.set(SX, GY + 1.4, SZ - 4.4); g.add(back, back.target);
+  back.position.set(SX, GY + 5.4, SZ - 17.0);
+  back.target.position.set(SX, GY + 1.6, SZ - 9.2); g.add(back, back.target);
 }
 
 /* children shrieking: formant-ish sweeps stacked at random, not a sample */
@@ -7347,21 +7388,21 @@ function updateSceneA(dt){
   /* ---- Batman's own beats ---- */
   if(t < SA.walk){
     applyPose(b, t < SA.kids ? CS.brace : CS.point, 1);
-    b.root.position.set(O.x, O.y, O.z + 6.4);
+    b.root.position.set(O.x, O.y, O.z + 11.0);
   } else if(t < SA.kick){
     const k = clamp((t - SA.walk)/(SA.kick - SA.walk), 0, 1);
     applyPose(b, CS.stride, 1);
     poseWalk(b, t*9, 1, t);
-    b.root.position.set(O.x, O.y, O.z + 6.4 - k*4.2);
+    b.root.position.set(O.x, O.y, O.z + 11.0 - k*7.6);
   } else if(t < SA.kick + 0.22){
     applyPose(b, CS.wind, 1);
-    b.root.position.z = O.z + 2.2;
+    b.root.position.z = O.z + 3.4;
   } else if(t < SA.reveal){
     applyPose(b, CS.kick2, 1);
-    b.root.position.z = O.z + 2.0;
+    b.root.position.z = O.z + 3.1;
   } else {
     applyPose(b, CS.arms, 1);
-    b.root.position.set(O.x + 1.5, O.y, O.z + 0.6);
+    b.root.position.set(O.x + 2.4, O.y, O.z + 1.2);
   }
   b.root.rotation.y = Math.PI;           // rig faces -z when yaw is PI
   updateCape(t, 0.35);
@@ -7391,12 +7432,12 @@ function updateSceneA(dt){
   }
 
   /* ---- camera ---- */
-  const A = { p:[O.x + 7.4, O.y + 2.4, O.z + 14.5], l:[O.x, O.y + 1.5, O.z + 4.0] };
-  const B = { p:[O.x + 3.0, O.y + 1.9, O.z + 10.6], l:[O.x, O.y + 1.7, O.z + 5.6] };
-  const C = { p:[O.x - 2.6, O.y + 1.8, O.z + 8.2],  l:[O.x + 0.2, O.y + 1.6, O.z + 3.4] };
-  const D = { p:[O.x - 3.4, O.y + 1.5, O.z + 5.0],  l:[O.x, O.y + 1.7, O.z + 0.6] };
-  const E = { p:[O.x - 3.1, O.y + 2.1, O.z + 3.4],  l:[O.x + 0.7, O.y + 1.5, O.z - 4.4] };
-  const F = { p:[O.x - 2.2, O.y + 1.8, O.z - 0.6],  l:[O.x + 0.3, O.y + 1.4, O.z - 4.8] };
+  const A = { p:[O.x + 13.0, O.y + 4.2, O.z + 25.0], l:[O.x - 1.0, O.y + 1.8, O.z + 5.0] };
+  const B = { p:[O.x + 6.2,  O.y + 2.9, O.z + 17.5], l:[O.x - 1.5, O.y + 1.9, O.z + 6.5] };
+  const C = { p:[O.x - 6.0,  O.y + 2.7, O.z + 14.0], l:[O.x + 0.4, O.y + 2.0, O.z + 5.0] };
+  const D = { p:[O.x - 7.0,  O.y + 2.4, O.z + 8.5],  l:[O.x + 0.2, O.y + 2.4, O.z + 1.0] };
+  const E = { p:[O.x - 6.4,  O.y + 3.2, O.z + 5.2],  l:[O.x + 1.6, O.y + 2.0, O.z - 8.0] };
+  const F = { p:[O.x - 4.6,  O.y + 2.8, O.z - 2.0],  l:[O.x + 0.8, O.y + 1.9, O.z - 9.2] };
   if(t < SA.line1)        camLerp(t/SA.line1, A, B);
   else if(t < SA.walk)    camLerp((t-SA.line1)/(SA.walk-SA.line1), B, C);
   else if(t < SA.kick)    camLerp((t-SA.walk)/(SA.kick-SA.walk), C, D);
@@ -7595,8 +7636,7 @@ function updateSceneB(dt){
   if(t >= SB.untie && !SCN.untied){
     SCN.untied = true;
     for(const k of MSET.tied) k.userData.free = true;
-    MSET.group.traverse(o=>{ if(o.geometry && o.geometry.type === 'TorusGeometry'
-      && o.material === CLOWN.rope) o.visible = false; });
+    MSET.group.traverse(o=>{ if(o.material === CLOWN.rope) o.visible = false; });
   }
   if(t >= SB.cash && !SCN.l4){
     SCN.l4 = true; throwCash();
@@ -7673,8 +7713,9 @@ function updateMission(dt){
     /* Measured from the front steps, not the site centre — the centre sits
        inside the building, so a centre-relative radius can never be reached
        from outside and the scene would never fire. */
-    const ex = M.school.x, ez = M.school.z + 8.55*SITE_S;
+    const ex = M.school.x, ez = M.school.z + 8.55*SCHOOL_S;
     const d = Math.hypot(player.pos.x - ex, player.pos.z - ez);
+    if(d < 90) buildMissionSet();          // absorb the build cost on approach
     if(d < SCHOOL_TRIGGER_R) beginSceneA();
   }
 }
