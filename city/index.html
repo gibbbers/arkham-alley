@@ -39,14 +39,21 @@
          transition:opacity .32s ease; }
   #det.on { opacity:1; }
   #det .tint { position:absolute; inset:0; background:
-      radial-gradient(ellipse 62% 74% at 50% 50%, rgba(40,190,220,.05) 0%, rgba(6,20,30,.42) 68%, rgba(2,8,14,.9) 100%); }
+      radial-gradient(ellipse 27% 40% at 26% 41%, rgba(40,190,220,.04) 0%, rgba(4,12,20,.30) 60%, rgba(0,0,0,.97) 82%),
+      radial-gradient(ellipse 27% 40% at 74% 41%, rgba(40,190,220,.04) 0%, rgba(4,12,20,.30) 60%, rgba(0,0,0,.97) 82%); }
   #det .scan { position:absolute; inset:0; opacity:.30; background:repeating-linear-gradient(
       0deg, rgba(120,230,255,.16) 0px, rgba(120,230,255,.16) 1px, transparent 1px, transparent 4px); }
-  #det .goggle { position:absolute; inset:0; }
-  #det .goggle:before, #det .goggle:after { content:''; position:absolute; top:12%; bottom:12%;
-      width:34%; border:1px solid rgba(120,230,255,.30); border-radius:46% 12% 12% 46%; }
-  #det .goggle:before { left:5%; }
-  #det .goggle:after { right:5%; transform:scaleX(-1); }
+  /* the cowl itself: opaque mask with two angled eye slits cut through it */
+  #det .cowl { position:absolute; inset:0; background:#000;
+      -webkit-mask:var(--slits); mask:var(--slits); }
+  #det .lens { position:absolute; top:19%; height:46%; width:39%;
+      border:1px solid rgba(120,230,255,.34); border-radius:52% 16% 22% 46%;
+      box-shadow:inset 0 0 60px rgba(60,200,240,.09); }
+  #det .lens.l { left:5.5%; }
+  #det .lens.r { right:5.5%; transform:scaleX(-1); }
+  #det .bridge { position:absolute; left:50%; top:14%; width:4.5%; height:56%;
+      margin-left:-2.25%; background:#05070a; border-left:1px solid rgba(120,230,255,.18);
+      border-right:1px solid rgba(120,230,255,.18); }
   #det .brk { position:absolute; width:26px; height:26px; border:2px solid rgba(120,230,255,.55); }
   #det .brk.tl{ top:9vh; left:22px; border-right:0; border-bottom:0; }
   #det .brk.tr{ top:9vh; right:22px; border-left:0; border-bottom:0; }
@@ -146,7 +153,8 @@
 <div id="title">Alley<small>three.js — procedural cinematic test</small></div>
 <div id="stats"></div>
 <div id="hpwrap"><div id="hpbar"><i id="hpfill"></i></div><div id="hplbl">VITALS</div></div>
-<div id="det"><div class="tint"></div><div class="scan"></div><div class="goggle"></div>
+<div id="det"><div class="tint"></div><div class="scan"></div>
+  <div class="lens l"></div><div class="lens r"></div><div class="bridge"></div>
   <span class="brk tl"></span><span class="brk tr"></span><span class="brk bl"></span><span class="brk br"></span>
   <div class="rdg"></div><div class="rd"></div><div class="tel"></div></div>
 <div id="use"><span class="k">E</span> Enter</div>
@@ -165,11 +173,9 @@
   <div class="row"><span>Let go</span><span class="k">Right click / Q</span></div>
   <div class="row"><span>Enter / use</span><span class="k">E</span></div>
   <div class="sec"></div>
-  <div class="row"><span>View</span><span class="k">V</span></div>
   <div class="row"><span>Free cam</span><span class="k">F</span></div>
   <div class="row"><span>Respawn</span><span class="k">R</span></div>
-  <div class="row"><span>Detective</span><span class="k">T</span></div>
-  <div class="row"><span>Cutscene</span><span class="k">G</span></div>
+  <div class="row"><span>Cowl POV</span><span class="k">V</span></div>
 </div>
 <div id="cap"><div class="box"><div class="who"></div><div class="txt"></div></div></div>
 <div id="snd"><input id="vol" type="range" min="0" max="100" value="75" /><button id="mute" title="mute">&#9834;</button></div>
@@ -3186,16 +3192,20 @@ function activeCamera(){ return ACT === 'city' ? cityCam : camera; }
 const fly = { yaw: Math.PI, pitch: -0.22, speed: 12, on: false };
 const flyKeys = Object.create(null);
 addEventListener('keydown', e=>{ flyKeys[e.code] = true;
-  if(e.code === 'KeyG'){ setAct(ACT === 'city' ? 'cutscene' : 'city'); }
   if(ACT !== 'city') return;
   if(e.code === 'KeyF'){ MODE = MODE === 'play' ? 'fly' : 'play';
     if(MODE === 'fly' && document.pointerLockElement) document.exitPointerLock(); }
-  if(e.code === 'KeyV'){ player.firstPerson = !player.firstPerson; }
+  if(e.code === 'KeyV'){
+    player.firstPerson = !player.firstPerson;
+    DETECTIVE = player.firstPerson;
+    detEl.classList.toggle('on', DETECTIVE);
+  }
   if(e.code === 'KeyQ'){ releaseGrapple(true); }
-  if(e.code === 'KeyE'){ if(nearDoor) enterDoor(); else releaseGrapple(true); }
+  if(e.code === 'KeyE'){
+    if(player.lobby) exitDoor(); else if(nearDoor) enterDoor(); else releaseGrapple(true);
+  }
   if(e.code === 'KeyR'){ spawnPlayer(); }
   if(e.code === 'KeyH'){ document.getElementById('keys').classList.toggle('min'); }
-  if(e.code === 'KeyT'){ DETECTIVE = !DETECTIVE; detEl.classList.toggle('on', DETECTIVE); }
 });
 addEventListener('keyup',   e=>{ flyKeys[e.code] = false; });
 canvas.addEventListener('mousedown', e=>{ if(ACT==='city') fly.on = true; });
@@ -5050,7 +5060,7 @@ function makeLobby(){
     bush.position.set(px, 1.1, -D+1.4); g.add(bush);
   }
   put(LB.chair, 5.0, 0.03, 3.2, 0, 0.22, -2.6);
-  const pl = new THREE.PointLight(0xffe6c0, 60*2.25, 22*1.5, 2);
+  const pl = new THREE.PointLight(0xffe6c0, 60, 22, 2);
   pl.position.set(0, H-0.9, -D*0.45); g.add(pl);
   /* someone crossing the floor, revealed only once you are actually inside */
   const visitor = new THREE.Mesh(GEO_PED, coatMats[3]);
@@ -5061,7 +5071,7 @@ function makeLobby(){
 }
 for(let i=0;i<LOBBY_POOL;i++){
   const g = makeLobby();
-  g.scale.setScalar(1.5);          // roomier once you're standing in it
+  g.scale.setScalar(1.0);          // authored at human scale — 1.5 dwarfed Batman
   cityScene.add(g); lobbies.push(g);
 }
 
@@ -5250,7 +5260,7 @@ const PCFG = {
   glideLiftTime:1.6, glideLiftSpeed:7.0, glideLiftAccel:26,
   diveGravity:34, diveMaxSpeed:38, diveTermV:34, pullUpGain:0.62,
   grappleRange:170, grappleTravel:340, grappleCooldown:0.24, ropeMin:5,
-  zipSpeed:82, reelSpeed:18, reelPull:38,
+  zipSpeed:135, reelSpeed:18, reelPull:38,
   swingBoost:1.18, releaseBoost:4.2,
   plummetSpeed:19, plummetFov:24, plummetShake:0.42,
   safeFall:22, killDrop:300, maxHealth:100, climbSpeed:6.4
@@ -5379,10 +5389,10 @@ let MODE = 'play';                    // 'play' | 'fly'
 let DETECTIVE = false;
 /* a real tube, not a Line — GL ignores linewidth so the old rope was hairline */
 const _rope = (function(){
-  const g = new THREE.CylinderGeometry(0.055, 0.055, 1, 6, 1, true);
+  const g = new THREE.CylinderGeometry(0.085, 0.085, 1, 6, 1, true);
   g.translate(0, 0.5, 0);
-  const m = new THREE.MeshStandardMaterial({ color:0x2b3038, roughness:0.5, metalness:0.7,
-              envMapIntensity:1.0 });
+  const m = new THREE.MeshStandardMaterial({ color:0x8e99a8, emissive:0x4a5768,
+              emissiveIntensity:0.8, roughness:0.35, metalness:0.6, envMapIntensity:1.4 });
   const mesh = new THREE.Mesh(g, m); mesh.frustumCulled = false; mesh.visible = false;
   cityScene.add(mesh); return mesh;
 })();
@@ -5411,7 +5421,7 @@ addEventListener('mouseup', e=>{
   /* a tap zips you to the anchor - that is the building-to-building move.
      holding reels you up the line instead. */
   if(grapple.holdT < 0.24 && (grapple.state === 'latched' || grapple.state === 'firing')){
-    grapple.state = 'zip';
+    grapple.state = 'zip'; grapple.zipT = 0;
   } else if(grapple.state === 'latched'){
     releaseGrapple(true);
   }
@@ -5464,14 +5474,18 @@ function updateGrapple(dt){
     _gDir.subVectors(grapple.anchor, _tmpA);
     const d = _gDir.length();
     _gDir.normalize();
-    if(d < 6){                                   // arrived: keep the momentum
-      player.vel.copy(_gDir).multiplyScalar(Math.max(18, player.vel.length()*0.75));
-      player.vel.y = Math.max(player.vel.y, 6);
+    if(d < 7){                                   // arrived: fling clear of the face
+      player.vel.copy(_gDir).multiplyScalar(34);
+      player.vel.y = Math.max(player.vel.y, 11);
       player.lift = PCFG.glideLiftTime;
+      cam.shake = Math.max(cam.shake, 0.16);
       releaseGrapple(false);
     } else {
-      player.vel.copy(_gDir).multiplyScalar(PCFG.zipSpeed);
+      // ramps in hard so it reads as a yank, not a drift
+      const ramp = Math.min(1, (grapple.zipT = (grapple.zipT||0) + dt) * 5.5);
+      player.vel.copy(_gDir).multiplyScalar(PCFG.zipSpeed * (0.45 + 0.55*ramp));
       player.fallDist = 0;
+      player.zipFx = 1;
     }
   }
   if(grapple.state === 'latched' && grapple.pressed && grapple.holdT > 0.24){
@@ -5713,8 +5727,9 @@ function updatePlayer(dt){
 /* ---- camera -------------------------------------------------------------- */
 function updatePlayerCamera(dt){
   cam.shake = Math.max(0, cam.shake - dt*0.9);
+  player.zipFx = Math.max(0, (player.zipFx||0) - dt*3.2);
   const sp = Math.hypot(player.vel.x, player.vel.z);
-  const wantFov = 62 + Math.min(sp/PCFG.glideMaxSpeed, 1.4)*9
+  const wantFov = 62 + (player.zipFx||0)*16 + Math.min(sp/PCFG.glideMaxSpeed, 1.4)*9
                   + (player.plummet||0)*PCFG.plummetFov + (player.gliding ? 5 : 0);
   cam.fov += (wantFov - cam.fov) * Math.min(1, dt*3.5);
   if(Math.abs(cityCam.fov - cam.fov) > 0.01){ cityCam.fov = cam.fov; cityCam.updateProjectionMatrix(); }
@@ -5788,11 +5803,27 @@ function updatePlayerRig(dt, t){
 /* ---- entrances ----------------------------------------------------------- */
 let nearDoor = null;
 const useEl = document.getElementById('use');
+function exitDoor(){
+  const d = player.insideBox2;
+  if(!d) return;
+  player.pos.set(d.x, d.y + 0.05, d.z + 2.2);
+  player.vel.set(0,0,0); player.grounded = true;
+  player.insideBox = null; player.insideBox2 = null; player.lobby = null;
+  cam.shake = 0.05;
+}
 function updateDoors(){
-  // step back outside and the shell closes again
-  if(player.insideBox2 && player.pos.z > player.insideBox2.z + 1.2){
-    player.insideBox = null; player.insideBox2 = null;
+  // inside: you are held by the lobby walls and leave through the door
+  if(player.lobby){
+    const L = player.lobby, p = player.pos;
+    p.x = clamp(p.x, L.x - L.hw, L.x + L.hw);
+    if(p.z < L.z0) { p.z = L.z0; player.vel.z = 0; }
+    if(p.z > L.z1) { p.z = L.z1; player.vel.z = 0; }
+    useEl.innerHTML = '<span class="k">E</span> Exit';
+    useEl.classList.add('on');
+    nearDoor = null;
+    return;
   }
+  useEl.innerHTML = '<span class="k">E</span> Enter';
   nearDoor = null;
   if(!player.grounded){ useEl.classList.remove('on'); return; }
   let best = 5.0*5.0;
@@ -5815,7 +5846,9 @@ function enterDoor(){
        nearDoor.z > c.z-c.hd-1.5 && nearDoor.z < c.z+c.hd+1.5){ player.insideBox = c; break; }
   }
   player.insideBox2 = nearDoor;
-  player.pos.set(nearDoor.x, nearDoor.y + 0.05, nearDoor.z - 5.5);
+  // the lobby shell you are now standing in
+  player.lobby = { x:nearDoor.x, z0:nearDoor.z - 12.6, z1:nearDoor.z - 0.4, hw:5.0, y:nearDoor.y };
+  player.pos.set(nearDoor.x, nearDoor.y + 0.05, nearDoor.z - 4.5);
   player.vel.set(0,0,0); player.grounded = true;
   cam.yaw = Math.PI; cam.shake = 0.06;
 }
