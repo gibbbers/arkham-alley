@@ -112,6 +112,28 @@
   #keys.min { width:auto; }
   #keys .sec { margin-top:6px; padding-top:5px; border-top:1px solid rgba(150,175,215,.12); }
 
+  /* ---- tactical map: an overlay, never a pause ---- */
+  #map { position:fixed; z-index:30; inset:0; display:flex; align-items:center;
+         justify-content:center; pointer-events:none; opacity:0;
+         transition:opacity .16s ease; }
+  #map.on { opacity:1; }
+  #map .frame { position:relative; width:min(74vh,74vw); aspect-ratio:1;
+                background:radial-gradient(circle at 50% 50%,
+                  rgba(10,26,38,.90) 0%, rgba(5,10,17,.94) 70%);
+                border:1px solid rgba(96,214,255,.30);
+                box-shadow:0 0 60px rgba(20,120,170,.20), inset 0 0 70px rgba(10,50,80,.5);
+                backdrop-filter:blur(3px); }
+  #map canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #map .brk { position:absolute; width:26px; height:26px; border:2px solid rgba(96,214,255,.75); }
+  #map .brk.tl{ top:-1px; left:-1px; border-right:0; border-bottom:0; }
+  #map .brk.tr{ top:-1px; right:-1px; border-left:0; border-bottom:0; }
+  #map .brk.bl{ bottom:-1px; left:-1px; border-right:0; border-top:0; }
+  #map .brk.br{ bottom:-1px; right:-1px; border-left:0; border-top:0; }
+  #map .ttl { position:absolute; top:9px; left:14px; font-size:9.5px; letter-spacing:.42em;
+              color:#7fd8f5; font-weight:700; }
+  #map .rdo { position:absolute; bottom:9px; right:14px; font-size:9px; letter-spacing:.22em;
+              color:#4d90ad; }
+
   #err { position:fixed; inset:0; z-index:50; display:none; padding:40px; color:#e88; font:12px/1.6 monospace;
          background:#000; white-space:pre-wrap; overflow:auto; }
 
@@ -163,6 +185,14 @@
   <span class="brk tl"></span><span class="brk tr"></span><span class="brk bl"></span><span class="brk br"></span>
   <div class="rdg"></div><div class="rd"></div><div class="tel"></div></div>
 <div id="use"><span class="k">E</span> Enter</div>
+<div id="map">
+  <div class="frame">
+    <canvas id="mapc" width="900" height="900"></canvas>
+    <i class="brk tl"></i><i class="brk tr"></i><i class="brk bl"></i><i class="brk br"></i>
+    <div class="ttl">GOTHAM &middot; TACTICAL GRID</div>
+    <div class="rdo">LIVE &middot; NO PAUSE</div>
+  </div>
+</div>
 <div id="keys">
   <h4><span>Controls</span><span id="keysToggle">[H]</span></h4>
   <div class="row"><span>Move</span><span class="k">W A S D</span></div>
@@ -178,7 +208,7 @@
   <div class="row"><span>Let go</span><span class="k">Right click / Q</span></div>
   <div class="row"><span>Enter / use</span><span class="k">E</span></div>
   <div class="sec"></div>
-  <div class="row"><span>Strike / combo</span><span class="k">X</span></div>
+  <div class="row"><span>Combo &rarr; blade</span><span class="k">X</span></div>
   <div class="row"><span>Kick</span><span class="k">Z</span></div>
   <div class="row"><span>Batarang</span><span class="k">B</span></div>
   <div class="row"><span>Roll</span><span class="k">C</span></div>
@@ -186,6 +216,7 @@
   <div class="row"><span>Free cam</span><span class="k">F</span></div>
   <div class="row"><span>Respawn</span><span class="k">R</span></div>
   <div class="row"><span>Cowl POV</span><span class="k">V</span></div>
+  <div class="row"><span>Tactical map</span><span class="k">M</span></div>
 </div>
 <div id="cap"><div class="box"><div class="who"></div><div class="txt"></div></div></div>
 <div id="snd"><input id="vol" type="range" min="0" max="100" value="75" /><button id="mute" title="mute">&#9834;</button></div>
@@ -3329,13 +3360,16 @@ addEventListener('keydown', e=>{ flyKeys[e.code] = true;
   if(e.code === 'KeyQ'){ releaseGrapple(true); }
   if(e.code === 'KeyB'){ startMove('batarang'); }
   if(e.code === 'KeyC'){ startMove('roll'); }
-  if(e.code === 'KeyX'){ startMove(combat.chain === 2 ? 'uppercut' : 'jab'); }
+  if(e.code === 'KeyX'){
+    startMove(combat.chain === 3 ? 'batstrike' : combat.chain === 2 ? 'uppercut' : 'jab');
+  }
   if(e.code === 'KeyZ'){ startMove('kick'); }
   if(e.code === 'KeyE'){
     if(player.lobby) exitDoor(); else if(nearDoor) enterDoor(); else releaseGrapple(true);
   }
   if(e.code === 'KeyR'){ spawnPlayer(); }
   if(e.code === 'KeyH'){ document.getElementById('keys').classList.toggle('min'); }
+  if(e.code === 'KeyM'){ MAPUI.toggle(); }
 });
 addEventListener('keyup',   e=>{ flyKeys[e.code] = false; });
 canvas.addEventListener('mousedown', e=>{ if(ACT==='city') fly.on = true; });
@@ -3383,6 +3417,7 @@ function updateCity(dt, t){
     updatePlayerCamera(dt);
     updatePlayerRig(dt, t);
     updateBarks(dt);
+    MAPUI.tick(dt);
     // wind rises with airspeed and closes the moment the cape folds
     const gl = player.gliding && !player.grounded;
     if(gl !== BARK.on){ BARK.on = gl; AUDIO.glide(gl, 0); }
@@ -5058,7 +5093,7 @@ function buildDealer(cx, cz){
   const banner = new THREE.MeshStandardMaterial({color:0x1a0e04, emissive:0xffb347,
                    emissiveIntensity:4.5, roughness:0.4});
   sbox(g, banner, 16, 1.6, 0.2, 0, H+2.0, -5+D/2, 0, false);
-  siteGroups.push({group:g, x:cx, z:cz, near:200});
+  siteGroups.push({group:g, x:cx, z:cz, near:200, name:'MOTORS'});
 }
 
 /* ---- corner store -------------------------------------------------------- */
@@ -6094,6 +6129,13 @@ const CB = {
   roll  : pose({hipY:-0.62, torX:1.05, hdX:0.45,
                 lShX:-2.30, lShZ:0.55, lElX:-2.35, rShX:-2.30, rShZ:-0.55, rElX:-2.35,
                 lHpX:1.45, lKnX:2.05, rHpX:1.45, rKnX:2.05}),
+  // finisher: blade held edge-out, brought across the body and released close
+  slash : pose({hipY:-0.10, hipYaw:0.46, torY:0.62, torX:0.16, hdX:0.10,
+                rShX:-0.75, rShZ:-1.15, rElX:-1.30, lShX:-0.66, lShZ:0.50, lElX:-1.90,
+                rHpX:-0.30, rKnX:0.48, lHpX:0.28, lKnX:0.44}),
+  rake  : pose({hipY:-0.02, hipYaw:-0.52, torY:-0.74, torX:-0.08, hdX:-0.14, fwd:0.34,
+                rShX:-1.72, rShZ:0.62, rElX:-0.16, lShX:-0.48, lShZ:0.58, lElX:-2.15,
+                rHpX:0.46, rKnX:0.10, lHpX:-0.24, lKnX:0.52}),
   throw : pose({hipY:-0.05, hipYaw:-0.34, torY:-0.55, torX:0.10, fwd:0.10,
                 rShX:-1.30, rShZ:-0.72, rElX:-0.30, lShX:-0.62, lShZ:0.40, lElX:-1.85,
                 rHpX:0.28, rKnX:0.18, lHpX:-0.14, lKnX:0.40})
@@ -6110,6 +6152,9 @@ const MOVES = {
                                        {t:0.62,p:CB.recov}] },
   roll:    { dur:0.66, hit:-1,   keys:[{t:0,p:CB.recov},{t:0.16,p:CB.roll,snap:true},
                                        {t:0.44,p:CB.roll},{t:0.66,p:CB.recov}] },
+  batstrike:{dur:0.60, hit:0.28, keys:[{t:0,p:CB.recov},{t:0.14,p:CB.slash},
+                                       {t:0.30,p:CB.rake,snap:true},{t:0.42,p:CB.rake},
+                                       {t:0.60,p:CB.recov}] },
   batarang:{ dur:0.52, hit:0.18, keys:[{t:0,p:CB.recov},{t:0.14,p:CB.windup},
                                        {t:0.24,p:CB.throw,snap:true},{t:0.36,p:CB.throw},
                                        {t:0.52,p:CB.recov}] }
@@ -6118,7 +6163,18 @@ const combat = { move:null, t:0, hitDone:false, chain:0, chainT:0 };
 function startMove(name){
   if(combat.move && combat.t < MOVES[combat.move].dur * 0.62) return;   // let it land first
   combat.move = name; combat.t = 0; combat.hitDone = false;
-  if(name === 'jab'){ combat.chain = (combat.chainT > 0 ? combat.chain + 1 : 0) % 3; combat.chainT = 0.9; }
+  /* the X combo is four beats: jab, jab, uppercut, blade. Each beat parks the
+     chain on the next one, and letting chainT lapse drops you back to the top,
+     so the finisher costs you the whole string rather than one mashed key. */
+  if(name === 'jab'){
+    combat.chain = combat.chainT > 0 ? Math.min(combat.chain + 1, 2) : 1;
+    combat.chainT = 0.9;
+  } else if(name === 'uppercut'){
+    combat.chain = 3; combat.chainT = 1.0;
+  } else if(name === 'batstrike'){
+    combat.chain = 0; combat.chainT = 0;
+    throwBatarang(true);                 // released point-blank, not lobbed
+  }
   if(name === 'roll'){
     const s = Math.sin(player.facing), c = Math.cos(player.facing);
     player.vel.x += s*13; player.vel.z += c*13;
@@ -6151,20 +6207,21 @@ for(let i=0;i<6;i++){
   BATARANGS.push({ mesh:m, live:false, t:0, vel:new THREE.Vector3(), spin:0 });
 }
 const _bDir = new THREE.Vector3();
-function throwBatarang(){
+function throwBatarang(pointBlank){
   const b = BATARANGS.find(o=>!o.live);
   if(!b) return;
   cityCam.getWorldDirection(_bDir);
   b.mesh.position.set(player.pos.x, player.pos.y + PCFG.height*0.66, player.pos.z)
-       .addScaledVector(_bDir, 0.7);
-  b.vel.copy(_bDir).multiplyScalar(46);
+       .addScaledVector(_bDir, pointBlank ? 1.15 : 0.7);
+  b.vel.copy(_bDir).multiplyScalar(pointBlank ? 62 : 46);
   b.live = true; b.t = 0; b.spin = 0; b.mesh.visible = true;
+  b.flat = !!pointBlank;                 // a finisher travels flat, not lobbed
 }
 function updateBatarangs(dt){
   for(const b of BATARANGS){
     if(!b.live) continue;
     b.t += dt;
-    b.vel.y -= 5.5*dt;                       // a shallow arc, not a bullet
+    b.vel.y -= (b.flat ? 1.6 : 5.5)*dt;      // a shallow arc, not a bullet
     b.mesh.position.addScaledVector(b.vel, dt);
     b.spin += dt*34;
     b.mesh.rotation.set(0.25, b.spin, 0.1);
@@ -6203,6 +6260,113 @@ function updateCombat(dt, t){
   return true;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   22. TACTICAL MAP — sites and your own position, drawn over a live game
+   ══════════════════════════════════════════════════════════════════════════ */
+const MAPUI = (function(){
+  const wrap = document.getElementById('map');
+  const cv   = document.getElementById('mapc');
+  const g2   = cv.getContext('2d');
+  const N    = cv.width;                       // square, 900px
+  let open = false, sweep = 0, acc = 0;
+
+  /* the grid covers the built city with a small margin so nothing sits on the
+     frame edge; sites are placed in this space, buildings deliberately are not */
+  const SPAN = CITY.span * 1.06;
+  const toPx = (v)=> N*0.5 + (v/SPAN)*N;
+
+  function grid(){
+    g2.lineWidth = 1;
+    g2.strokeStyle = 'rgba(80,190,235,0.10)';
+    const step = (CITY.block/SPAN)*N*2;
+    for(let p = N*0.5 % step; p < N; p += step){
+      g2.beginPath(); g2.moveTo(p,0); g2.lineTo(p,N); g2.stroke();
+      g2.beginPath(); g2.moveTo(0,p); g2.lineTo(N,p); g2.stroke();
+    }
+    // range rings centred on the player, every 200m
+    g2.strokeStyle = 'rgba(80,190,235,0.13)';
+    const px = toPx(player.pos.x), pz = toPx(player.pos.z);
+    for(let r = 200; r <= 800; r += 200){
+      g2.beginPath(); g2.arc(px, pz, (r/SPAN)*N, 0, 6.2832); g2.stroke();
+    }
+    // city bounds
+    g2.strokeStyle = 'rgba(96,214,255,0.28)';
+    const h = (CITY.span*0.5/SPAN)*N;
+    g2.strokeRect(N*0.5-h, N*0.5-h, h*2, h*2);
+  }
+
+  function marks(){
+    const list = siteGroups.map(s=>({x:s.x, z:s.z, name:s.name || 'SITE'}));
+    list.push({x:HALL.x, z:HALL.z, name:'CITY HALL'});
+    g2.font = '600 13px ui-sans-serif,system-ui,sans-serif';
+    g2.textAlign = 'center';
+    for(const m of list){
+      const x = toPx(m.x), y = toPx(m.z);
+      const d = Math.hypot(m.x-player.pos.x, m.z-player.pos.z);
+      const near = d < 260;
+      g2.strokeStyle = near ? 'rgba(150,240,255,0.95)' : 'rgba(96,214,255,0.55)';
+      g2.fillStyle   = near ? 'rgba(150,240,255,0.16)' : 'rgba(96,214,255,0.07)';
+      g2.lineWidth = 1.6;
+      g2.beginPath(); g2.rect(x-6, y-6, 12, 12); g2.fill(); g2.stroke();
+      g2.beginPath(); g2.moveTo(x-11,y); g2.lineTo(x-7,y); g2.moveTo(x+7,y); g2.lineTo(x+11,y);
+      g2.stroke();
+      g2.fillStyle = near ? '#d8f6ff' : 'rgba(150,215,240,0.72)';
+      g2.fillText(m.name, x, y - 13);
+      g2.fillStyle = 'rgba(120,190,220,0.6)';
+      g2.font = '500 11px ui-sans-serif,system-ui,sans-serif';
+      g2.fillText(Math.round(d) + 'M', x, y + 22);
+      g2.font = '600 13px ui-sans-serif,system-ui,sans-serif';
+    }
+  }
+
+  function you(){
+    const x = toPx(player.pos.x), y = toPx(player.pos.z);
+    g2.save(); g2.translate(x, y); g2.rotate(-player.facing + Math.PI);
+    g2.fillStyle = '#eafcff';
+    g2.beginPath(); g2.moveTo(0,-13); g2.lineTo(9,10); g2.lineTo(0,5); g2.lineTo(-9,10);
+    g2.closePath(); g2.fill();
+    g2.restore();
+    g2.strokeStyle = 'rgba(234,252,255,0.35)'; g2.lineWidth = 1.4;
+    g2.beginPath(); g2.arc(x, y, 17 + Math.sin(sweep*3)*2.5, 0, 6.2832); g2.stroke();
+  }
+
+  function radar(){
+    const x = N*0.5, y = N*0.5, R = N*0.5;
+    const gr = g2.createConicGradient ? g2.createConicGradient(sweep, x, y) : null;
+    if(gr){
+      gr.addColorStop(0.00, 'rgba(96,214,255,0.16)');
+      gr.addColorStop(0.10, 'rgba(96,214,255,0.00)');
+      gr.addColorStop(1.00, 'rgba(96,214,255,0.00)');
+      g2.fillStyle = gr;
+      g2.beginPath(); g2.arc(x, y, R, 0, 6.2832); g2.fill();
+    }
+  }
+
+  function draw(){
+    g2.clearRect(0,0,N,N);
+    radar(); grid(); marks(); you();
+    // compass
+    g2.fillStyle = 'rgba(127,216,245,0.8)';
+    g2.font = '700 12px ui-sans-serif,system-ui,sans-serif';
+    g2.textAlign = 'center';
+    g2.fillText('N', N*0.5, 22); g2.fillText('S', N*0.5, N-10);
+    g2.fillText('W', 14, N*0.5); g2.fillText('E', N-14, N*0.5);
+  }
+
+  return {
+    get open(){ return open; },
+    toggle(){ open = !open; wrap.classList.toggle('on', open); if(open){ acc = 1; } },
+    /* redrawn a few times a second, not every frame — the game underneath
+       keeps running at full rate, which is the whole point of the overlay */
+    tick(dt){
+      if(!open) return;
+      sweep += dt*1.6; acc += dt;
+      if(acc < 0.07) return;
+      acc = 0; draw();
+    }
+  };
+})();
+
 window.GOTHAM = {
   get act(){ return ACT; }, setAct:(a)=>setAct(a),
   scene:()=>cityScene, cam:()=>cityCam, CITY,
@@ -6212,6 +6376,7 @@ window.GOTHAM = {
   fire:()=>fireGrapple(), release:(l)=>releaseGrapple(l), ray:(o,d,t)=>rayCity(o,d,t),
   groundAt:(x,z,y)=>groundAt(x,z,y), near:(x,z)=>collidersNear(x,z),
   BARK, combat, audioSfx:AUDIO,
+  MAPUI,
   view(p, look){ cityCam.position.set(p[0],p[1],p[2]);
     if(look){ const d=new THREE.Vector3(look[0]-p[0],look[1]-p[1],look[2]-p[2]).normalize();
       fly.yaw = Math.atan2(d.x, d.z); fly.pitch = Math.asin(clamp(d.y,-1,1)); }
