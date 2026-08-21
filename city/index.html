@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<!-- one file means one cache entry; without this a stale build silently
+     replaces every fix and the page looks broken for no visible reason -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
 <title>ALLEY — cinematic Three.js demo</title>
 <style>
@@ -2505,7 +2510,7 @@ function frame(dtReal){
     fadeEl.style.opacity = '0';              // the CSS blackout starts opaque
     titleEl.style.opacity = '0';
     grade.uniforms.uTime.value  = elapsed;
-    grade.uniforms.uFade.value  = cityFadeIn > 0 ? easeOut(cityFadeIn/1.5) : 0;
+    grade.uniforms.uFade.value  = cityFadeIn > 0 ? easeOut(cityFadeIn/0.9) : 0;
     grade.uniforms.uPunch.value = FX.punch;
     grade.uniforms.uFlash.value = FX.flash;
     composer.render();
@@ -2624,8 +2629,8 @@ function frame(dtReal){
   else if(t > LOOP-1.6)   fade = easeOut((t-(LOOP-1.6))/1.6);
   /* the Joker's laugh plays out, the camera pulls back, and we cut to the
      open world rather than looping the scene */
-  if(started && !handedOff && elapsed >= LOOP - 0.12){
-    handedOff = true; setAct('city'); spawnPlayer(); cityFadeIn = 1.5;
+  if(started && !handedOff && elapsed >= LOOP - 0.85){
+    handedOff = true; setAct('city'); spawnPlayer(); cityFadeIn = 0.9;
   }
   updateAudio(t, dtReal);
   keysEl.style.display = 'none'; hpWrap.style.display = 'none'; hurtFx.style.opacity = 0;
@@ -2667,7 +2672,11 @@ window.__seek = (T)=>{ elapsed = Math.max(0, T-0.24); prevBatZ = BAT_Z0;
 /* small console handle for poking at the shot list:
    ALLEY.seek(7.5) jumps to a moment, ALLEY.step(dt) advances one frame */
 window.ALLEY = { seek:window.__seek, step:frame, scene, camera, renderer, composer,
-                 lights, batman, crooks, THREE };
+                 lights, batman, crooks, THREE,
+                 get elapsed(){ return elapsed; },
+                 get started(){ return started; },
+                 get handedOff(){ return handedOff; },
+                 get LOOP(){ return LOOP; } };
 
 let curW=0, curH=0;
 function applySize(w,h){
@@ -4359,7 +4368,7 @@ function column(g, x, z, h, rad){
 
   const S = HALL.S;
   cityColliders.push({x:HALL.x, z:HALL.z, hw:W*0.5*S, hd:D*0.5*S, top:(PL+H)*S});
-  cityRoofs.push({x:HALL.x, y:(PL+H+2.6)*S, z:HALL.z, w:W*0.7*S, d:D*0.7*S});
+  cityRoofs.push({x:HALL.x, y:(PL+H)*S, z:HALL.z, w:W*0.7*S, d:D*0.7*S});
   HALL.roofY = drumY*S; HALL.domeTop = (drumY+28)*S;
 })();
 
@@ -5700,9 +5709,19 @@ function updatePlayer(dt){
 
   // integrate, then resolve
   player.touchWall = false;
+  const prevY = player.pos.y;
   player.pos.addScaledVector(player.vel, dt);
+  /* Sweep the whole step, not just where we ended up: at dive speed a frame
+     covers well over a metre, so testing only the post-move height let the
+     capsule drop clean through roofs it should have landed on.
+     This has to happen BEFORE resolveWalls — once we are below a roof line the
+     wall resolver counts us as inside the mass and shoves us out sideways, and
+     then there is no roof under us to land on at all. */
+  const swept = groundAt(player.pos.x, player.pos.z, Math.max(prevY, player.pos.y));
+  if(player.vel.y <= 0 && prevY >= swept - 0.001 && player.pos.y < swept)
+    player.pos.y = swept;
   resolveWalls(player.pos);
-  const gy = groundAt(player.pos.x, player.pos.z, player.pos.y);
+  const gy = groundAt(player.pos.x, player.pos.z, Math.max(prevY, player.pos.y));
   if(player.pos.y <= gy + 0.001 && player.vel.y <= 0){
     if(!player.grounded){
       const d = (player.fallDist||0);
@@ -5918,8 +5937,13 @@ function updateDetective(){
 function spawnPlayer(){
   const r = cityRoofs.filter(o=>o.y > 60 && o.y < 130);
   const s = r[(rand()*r.length)|0] || {x:0, y:40, z:0};
-  player.pos.set(s.x, s.y + 1.2, s.z);
-  player.vel.set(0,0,0); player.grounded = false; player.apexY = player.pos.y;
+  /* stand him exactly on the roof. Spawning in mid-air meant the first thing
+     the player did on arriving in the city was fall, and the drop was long
+     enough to punch through the roof before the ground test could catch it */
+  const gy = groundAt(s.x, s.z, s.y + 2);
+  player.pos.set(s.x, Math.abs(gy - s.y) < 3 ? gy : s.y, s.z);
+  player.vel.set(0,0,0); player.grounded = true; player.apexY = player.pos.y;
+  player.fallDist = 0; player.gliding = false; player.health = PCFG.maxHealth;
   cam.yaw = Math.atan2(-s.x, -s.z);
 }
 
@@ -6058,6 +6082,7 @@ window.GOTHAM = {
   sites:()=>siteGroups, RESERVED, doors:()=>cityDoors, lobbies:()=>lobbies,
   player, grapple, cam, spawn:()=>spawnPlayer(), get mode(){return MODE;}, setMode:m=>MODE=m,
   fire:()=>fireGrapple(), release:(l)=>releaseGrapple(l), ray:(o,d,t)=>rayCity(o,d,t),
+  groundAt:(x,z,y)=>groundAt(x,z,y), near:(x,z)=>collidersNear(x,z),
   view(p, look){ cityCam.position.set(p[0],p[1],p[2]);
     if(look){ const d=new THREE.Vector3(look[0]-p[0],look[1]-p[1],look[2]-p[2]).normalize();
       fly.yaw = Math.atan2(d.x, d.z); fly.pitch = Math.asin(clamp(d.y,-1,1)); }
