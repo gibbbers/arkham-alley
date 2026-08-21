@@ -5172,6 +5172,7 @@ function buildSchool(cx, cz){
   /* The mission set replaces this whole entrance with a flat apron and its own
      doors, so keep a handle on the pieces that would otherwise collide with it:
      a flight of steps rising exactly where the forecourt needs to be flat. */
+  const WXL = -10.4, WXW = WXL*SCHOOL_S;   // break-in slot, local and metres
   const entranceBits = [];
   for(let i=0;i<4;i++) entranceBits.push(
     sbox(g, SM.conc, 9 - i*0.4, 0.28, 1.2, 0, 0.3 + i*0.28, -4 + D/2 + 5.4 + i*1.2, 0, false));
@@ -5186,70 +5187,147 @@ function buildSchool(cx, cz){
   for(let i=0;i<11;i++)
     sitePeople.push({ x:cx+rr(-20,20)*SCHOOL_S, z:cz+rr(4,14)*SCHOOL_S, r:rr(1.5,5),
                       sp:rr(0.5,1.4), ph:rand()*6.28, mat:SCHOOLKID[(rand()*4)|0] });
-  /* ---- second floor: corridor along the window wall, classrooms behind ----
-     The break-in pane is one of the front windows, so the room you land in is
-     the corridor and every classroom opens off it. */
+  /* ---- second floor -------------------------------------------------------
+     Authored in METRES inside a scale-cancelling group. The storey used to be
+     written in the school's local units, so once the building went to 2.4 the
+     furniture went with it: 3.6m desks, 4.6m lockers, a 10m ceiling. Cancel
+     the scale and the numbers mean what they say.
+
+     Plan is a real one: a front corridor along the window wall where you land,
+     eight classrooms off it, a spine corridor behind that, and three large
+     rooms -- library, gym, lab -- across the back. */
   {
     const IN = makeInterior(g, cx, cz, 70);
     const FY = 0.3 + FL;                     // slab this storey sits on
-    const CH = 4.3;                          // clear height — ~10m once scaled
-    const X0 = -18, X1 = 18, ZB = -11, ZF = 3.6;
-    const CORZ = 2.2;                        // corridor centre line
-    const f = new THREE.Group(); f.position.y = FY; IN.add(f);
+    const f  = new THREE.Group();
+    f.position.y = FY;
+    f.scale.setScalar(1/SCHOOL_S);           // everything below is in metres
+    IN.add(f);
 
-    sbox(f, INT.lino, X1-X0, 0.18, ZF-ZB, (X0+X1)/2, 0.09, (ZB+ZF)/2, 0, false);
-    sbox(f, INT.ceil, X1-X0, 0.18, ZF-ZB, (X0+X1)/2, CH,   (ZB+ZF)/2, 0, false);
-    sbox(f, INT.wall, X1-X0, CH, 0.22, (X0+X1)/2, CH/2, ZB, 0, false);          // back
-    for(const sx of [X0, X1]) sbox(f, INT.wall, 0.22, CH, ZF-ZB, sx, CH/2, (ZB+ZF)/2, 0, false);
-    for(let i=0;i<9;i++) sbox(f, INT.strip, 2.4, 0.08, 0.4, X0+3+i*4.2, CH-0.12, CORZ, 0, false);
+    const HW = (W*0.5 - 0.6)*SCHOOL_S;       // interior half-width, metres
+    const CH = 3.5;                          // a classroom ceiling, not a hangar
+    const ZF =  (3.6)*SCHOOL_S;              // front wall (window side)
+    const ZB = (-11)*SCHOOL_S;               // back wall
+    const CORW = 4.4, ROOMD = 11.5;
+    const corA = ZF - CORW*0.5 - 0.3;                    // front corridor centre
+    const row1 = corA - CORW*0.5 - ROOMD*0.5;            // classroom row
+    const corB = row1 - ROOMD*0.5 - CORW*0.5;            // spine corridor
+    const row2 = corB - CORW*0.5 - ROOMD*0.5;            // big rooms
 
-    // lockers line the corridor's inner wall between classroom doors
-    for(let i=0;i<22;i++){
-      const lx = X0 + 1.4 + i*1.6;
-      if(Math.abs(lx+10.4) < 1.6) continue;                 // keep the landing clear
-      sbox(f, INT.locker, 1.4, 1.9, 0.42, lx, 1.05, 0.95, 0, false);
-      sbox(f, INT.metal,  0.06, 0.06, 0.06, lx+0.5, 1.15, 0.72, 0, false);
-    }
+    const slab = (z, d)=>{
+      sbox(f, INT.lino, HW*2, 0.16, d, 0, 0.08, z, 0, false);
+      sbox(f, INT.ceil, HW*2, 0.16, d, 0, CH,   z, 0, false);
+    };
+    slab(corA, CORW); slab(row1, ROOMD); slab(corB, CORW); slab(row2, ROOMD);
+    sbox(f, INT.wall, HW*2, CH, 0.25, 0, CH/2, ZB, 0, false);
+    for(const sx of [-1,1]) sbox(f, INT.wall, 0.25, CH, ZF-ZB, sx*HW, CH/2, (ZB+ZF)/2, 0, false);
+    for(const cz2 of [corA, corB])
+      for(let i=0;i<Math.floor(HW*2/6);i++)
+        sbox(f, INT.strip, 2.2, 0.07, 0.32, -HW + 3 + i*6, CH-0.10, cz2, 0, false);
 
-    // three classrooms behind the corridor, split by partitions
-    const PART = [-6.5, 6.5];
-    for(const px of PART) sbox(f, INT.wall, 0.22, CH, 0.7-ZB, px, CH/2, (ZB+0.7)/2, 0, false);
-    const rooms = [[X0+0.5, -6.6], [-6.4, 6.4], [6.6, X1-0.5]];
-    for(let r=0; r<rooms.length; r++){
-      const [rx0, rx1] = rooms[r], mid = (rx0+rx1)/2;
-      // front wall of the classroom, with a doorway punched through it
-      const dW = 1.5, dx = mid;
-      sbox(f, INT.wall, (dx-dW/2)-rx0, CH, 0.22, (rx0+dx-dW/2)/2, CH/2, 0.7, 0, false);
-      sbox(f, INT.wall, rx1-(dx+dW/2), CH, 0.22, (dx+dW/2+rx1)/2, CH/2, 0.7, 0, false);
-      sbox(f, INT.wall, dW, CH-2.3, 0.22, dx, CH-0.55, 0.7, 0, false);        // lintel
-      // blackboard on the back wall, teacher's desk under it, rows of desks
-      sbox(f, INT.board, (rx1-rx0)*0.55, 1.5, 0.08, mid, 1.85, ZB+0.2, 0, false);
-      deskUnit(f, mid, ZB+1.9, Math.PI, 2.0, 0.8);
-      for(let row=0; row<3; row++) for(let col=0; col<3; col++){
-        const dxp = mid - 2.6 + col*2.6, dzp = ZB + 3.9 + row*2.1;
-        if(dxp < rx0+0.7 || dxp > rx1-0.7) continue;
-        deskUnit(f, dxp, dzp, 0, 1.5, 0.7);
+    const doorH = 2.15, doorW = 1.1;
+    /* a partition with a doorway punched through it */
+    const partition = (z, x0, x1, dx)=>{
+      sbox(f, INT.wall, (dx-doorW)-x0, CH, 0.2, (x0+dx-doorW)/2, CH/2, z, 0, false);
+      sbox(f, INT.wall, x1-(dx+doorW), CH, 0.2, (dx+doorW+x1)/2, CH/2, z, 0, false);
+      sbox(f, INT.wall, doorW*2, CH-doorH, 0.2, dx, doorH+(CH-doorH)/2, z, 0, false);
+    };
+
+    // ---- eight classrooms off the front corridor ----
+    const NC = 8, cw = (HW*2 - 1.0)/NC;
+    for(let r=0; r<NC; r++){
+      const rx0 = -HW + 0.5 + r*cw, rx1 = rx0 + cw, mid = (rx0+rx1)/2;
+      partition(corA - CORW*0.5, rx0, rx1, mid);
+      if(r) sbox(f, INT.wall, 0.2, CH, ROOMD, rx0, CH/2, row1, 0, false);
+      // blackboard, teacher's desk, four rows of paired desks
+      sbox(f, INT.board, cw*0.52, 1.25, 0.06, mid, 1.55, row1 - ROOMD*0.5 + 0.2, 0, false);
+      deskUnit(f, mid, row1 - ROOMD*0.5 + 1.5, Math.PI, 1.6, 0.7);
+      for(let row=0; row<4; row++) for(let col=0; col<3; col++){
+        const dx = mid - 2.4 + col*2.4, dz = row1 - ROOMD*0.5 + 3.6 + row*1.9;
+        if(dx < rx0+1.0 || dx > rx1-1.0) continue;
+        deskUnit(f, dx, dz, 0, 1.25, 0.6);
       }
-      for(let i=0;i<3;i++) sbox(f, INT.strip, 2.0, 0.08, 0.36, mid, CH-0.12, ZB+2.4+i*2.6, 0, false);
-      // one person per classroom so it is never an empty box
+      for(let i=0;i<2;i++)
+        sbox(f, INT.strip, 1.8, 0.07, 0.3, mid, CH-0.10, row1 - 2.2 + i*4.4, 0, false);
       const who = new THREE.Mesh(GEO_PED, SCHOOLKID[r % SCHOOLKID.length]);
-      who.position.set(mid + rr(-1.5,1.5), 0.52, ZB + 2.6); f.add(who);
+      who.position.set(mid + rr(-1.2,1.2), 0.5, row1 - ROOMD*0.5 + 2.6);
+      who.scale.setScalar(1.05); f.add(who);
     }
 
-    /* the pane you come through: one front window, framed and struck */
-    const WX = -10.4, WY = 1.9 + FL, WZ = -4 + D/2;
-    const pane = sbox(g, GLASS_MAT, 2.4, 2.4, 0.10, WX, WY, WZ + 0.12, 0, false);
-    sbox(g, SM.conc, 2.8, 0.22, 0.34, WX, WY + 1.3, WZ + 0.16, 0, false);
-    sbox(g, SM.conc, 2.8, 0.22, 0.34, WX, WY - 1.3, WZ + 0.16, 0, false);
-    for(const sx of [-1,1]) sbox(g, SM.conc, 0.22, 2.6, 0.34, WX + sx*1.3, WY, WZ + 0.16, 0, false);
+    // ---- lockers down the corridor, clear of the landing ----
+    const landX = WXW;
+    for(let i=0;i<Math.floor(HW*2/1.05)-1;i++){
+      const lx = -HW + 0.8 + i*1.05;
+      if(Math.abs(lx - landX) < 2.4) continue;               // the landing
+      let blocked = false;                                    // and every doorway
+      for(let r=0;r<NC;r++){
+        const mid = -HW + 0.5 + r*cw + cw*0.5;
+        if(Math.abs(lx - mid) < 1.9){ blocked = true; break; }
+      }
+      if(blocked) continue;
+      sbox(f, INT.locker, 0.95, 1.85, 0.42, lx, 0.93, corA - CORW*0.5 + 0.33, 0, false);
+      sbox(f, INT.metal, 0.05, 0.05, 0.05, lx + 0.34, 1.05, corA - CORW*0.5 + 0.56, 0, false);
+    }
+
+    // ---- three big rooms across the back ----
+    const bigs = [['LIBRARY',-1], ['GYM',0], ['LAB',1]];
+    const bw = (HW*2 - 1.0)/3;
+    for(let r=0; r<3; r++){
+      const rx0 = -HW + 0.5 + r*bw, rx1 = rx0 + bw, mid = (rx0+rx1)/2;
+      partition(corB - CORW*0.5, rx0, rx1, mid);
+      if(r) sbox(f, INT.wall, 0.2, CH, ROOMD, rx0, CH/2, row2, 0, false);
+      if(r === 0){                                   // library: stacks and tables
+        for(let k=0;k<6;k++){
+          const sx = mid - bw*0.34 + k*(bw*0.135);
+          sbox(f, INT.desk, 0.5, 2.0, 5.2, sx, 1.0, row2 - 1.2, 0, false);
+        }
+        for(let k=0;k<3;k++) deskUnit(f, mid, row2 + 3.2 + k*0.0 - k*1.6, 0, 2.4, 1.0);
+      } else if(r === 1){                            // gym: court lines and hoops
+        sbox(f, INT.desk, bw*0.8, 0.03, ROOMD*0.78, mid, 0.17, row2, 0, false);
+        for(const sz of [-1,1]){
+          sbox(f, INT.board, 1.6, 1.0, 0.08, mid, 2.6, row2 + sz*ROOMD*0.38, 0, false);
+          const rim = new THREE.Mesh(new THREE.TorusGeometry(0.23,0.03,6,14), SM.rim);
+          rim.rotation.x = Math.PI/2;
+          rim.position.set(mid, 2.15, row2 + sz*(ROOMD*0.38 - 0.35)); f.add(rim);
+        }
+        for(let k=0;k<3;k++){
+          const kid = new THREE.Mesh(GEO_PED, SCHOOLKID[k]);
+          kid.position.set(mid + rr(-3,3), 0.5, row2 + rr(-3,3));
+          kid.scale.setScalar(1.05); f.add(kid);
+        }
+      } else {                                       // lab: benches and stools
+        for(let k=0;k<3;k++){
+          sbox(f, INT.desk, bw*0.72, 0.9, 1.1, mid, 0.55, row2 - 3.0 + k*3.0, 0, false);
+          sbox(f, INT.metal, bw*0.72, 0.08, 1.2, mid, 1.02, row2 - 3.0 + k*3.0, 0, false);
+          for(let q=0;q<4;q++)
+            scyl(f, INT.metal, 0.16,0.16, 0.62, 8,
+                 mid - bw*0.26 + q*(bw*0.17), 0.31, row2 - 3.0 + k*3.0 + 1.1, false);
+        }
+      }
+      for(let i=0;i<3;i++)
+        sbox(f, INT.strip, 2.4, 0.07, 0.34, mid, CH-0.10, row2 - 3.4 + i*3.4, 0, false);
+      const who = new THREE.Mesh(GEO_PED, SCHOOLKID[(r+2) % SCHOOLKID.length]);
+      who.position.set(mid + rr(-2,2), 0.5, row2 + rr(-2,2));
+      who.scale.setScalar(1.05); f.add(who);
+    }
+
+    /* the pane you come through: a tall stair window, sill on the floor */
+    const PW = 1.6, PH = 1.8;                        // local units
+    const WX = WXL, WY = FY + PH*0.5, WZ = -4 + D/2;
+    const pane = sbox(g, GLASS_MAT, PW, PH, 0.10, WX, WY, WZ + 0.12, 0, false);
+    sbox(g, SM.conc, PW+0.4, 0.18, 0.34, WX, WY + PH*0.5 + 0.09, WZ + 0.16, 0, false);
+    sbox(g, SM.conc, PW+0.4, 0.18, 0.34, WX, WY - PH*0.5 - 0.09, WZ + 0.16, 0, false);
+    for(const sx of [-1,1])
+      sbox(g, SM.conc, 0.18, PH+0.36, 0.34, WX + sx*(PW*0.5+0.09), WY, WZ + 0.16, 0, false);
     addWindow(g, pane, {
-      name:'SCHOOL', w:2.4, h:2.4, interior:IN,
-      inside:{ x:cx + WX*SCHOOL_S, y:FY*SCHOOL_S + 0.18*SCHOOL_S, z:cz + CORZ*SCHOOL_S },
-      room:{ x0:cx + (X0+0.8)*SCHOOL_S, x1:cx + (X1-0.8)*SCHOOL_S,
-             z0:cz + (ZB+0.8)*SCHOOL_S, z1:cz + (ZF-0.6)*SCHOOL_S,
-             y:(FY + 0.18)*SCHOOL_S, ceil:(FY + CH - 0.4)*SCHOOL_S }
+      name:'SCHOOL', w:PW, h:PH, interior:IN,
+      inside:{ x:cx + WX*SCHOOL_S, y:FY*SCHOOL_S + 0.16, z:cz + (ZF - 1.6) + 0 },
+      room:{ x0:cx - HW + 1.0, x1:cx + HW - 1.0,
+             z0:cz + ZB + 1.0,  z1:cz + ZF - 0.8,
+             y:FY*SCHOOL_S + 0.16, ceil:FY*SCHOOL_S + CH - 0.3 }
     });
-    schoolRooms.push({ g:f, cx, cz, FY, CORZ, X0, X1, ZB, mid:rooms[1], interior:IN });
+    schoolRooms.push({ g:f, cx, cz, FY, corridorZ:corA, halfWidth:HW,
+                       zBack:ZB, zFront:ZF, interior:IN });
     compactGroup(IN);
   }
   siteGroups.push({group:g, x:cx, z:cz, near:200, name:'SCHOOL', entranceBits});
@@ -6434,7 +6512,7 @@ function updatePlayerCamera(dt){
     const R = player.room || player.arena;
     /* Pull back for the fight: three men at Batman's size need room in frame,
        and the arena is big enough that nothing is in the way. */
-    if(player.arena)   dist = clamp(dist + 2.6, 8.4, 9.6);
+    if(player.arena)   dist = clamp(dist + 4.4, 10.2, 11.6);
     else if(R)         dist = Math.min(dist, 4.6);
     /* Inside the arena the box clamp below already guarantees a legal camera,
        and this ray would otherwise hit the school shell the hall is carved out
