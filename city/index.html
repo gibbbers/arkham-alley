@@ -3022,6 +3022,10 @@ cityScene.add(cityBounce);
 const cityGlow = new THREE.DirectionalLight(0xffa468, 0.42);
 cityGlow.position.set(-160, 70, 250);
 cityScene.add(cityGlow);
+/* a soft moon-toned wash so Batman never vanishes against a dark facade */
+const heroSpot = new THREE.SpotLight(0xbcd0f2, 46, 26, 0.52, 0.9, 1.6);
+heroSpot.position.set(0, 14, 0);
+cityScene.add(heroSpot, heroSpot.target);
 const cityGlow2 = new THREE.DirectionalLight(0x6f86c8, 0.30);
 cityGlow2.position.set(220, 90, -150);
 cityScene.add(cityGlow2);
@@ -5611,7 +5615,13 @@ function updatePlayer(dt){
 
   // glide / dive
   const airborne = !player.grounded;
-  const wantGlide = k.Space && airborne && !swinging && player.vel.y < PCFG.glideMinFall;
+  /* a standing jump must not turn into flight — the cape only catches after a
+     real drop, or from meaningful height */
+  const dropSoFar = player.apexY - player.pos.y;
+  const highUp = player.pos.y - groundAt(player.pos.x, player.pos.z, player.pos.y) > 11;
+  const wantGlide = k.Space && airborne && !swinging
+                    && player.vel.y < PCFG.glideMinFall
+                    && (dropSoFar > 7 || highUp);
   if(wantGlide && !player.gliding && !spaceTapped) player.gliding = true;
   if(player.grounded || swinging) player.gliding = false;
   if(!k.Space) player.gliding = false;
@@ -5812,6 +5822,9 @@ function updatePlayerRig(dt, t){
   _heroDir.set(player.pos.x-cityCam.position.x, 0, player.pos.z-cityCam.position.z).normalize();
   heroRim.position.set(player.pos.x + _heroDir.x*1.25, player.pos.y + 2.1, player.pos.z + _heroDir.z*1.25);
   heroKey.position.set(player.pos.x - _heroDir.x*0.95, player.pos.y + 1.9, player.pos.z - _heroDir.z*0.95);
+  heroSpot.position.set(player.pos.x - 2.2, player.pos.y + 13, player.pos.z - 2.2);
+  heroSpot.target.position.set(player.pos.x, player.pos.y, player.pos.z);
+  heroSpot.target.updateMatrixWorld();
 }
 
 /* ---- entrances ----------------------------------------------------------- */
@@ -6052,7 +6065,10 @@ window.GOTHAM = {
 };
 
 /* warm up shaders, then start */
-if(new URLSearchParams(location.search).get('act') === 'city'){
+/* Debug shortcut, deliberately renamed: an old ?act=city bookmark used to
+   skip the whole cutscene, which is why the scene appeared to be missing.
+   Only ?dev=city jumps straight to the open world now. */
+if(new URLSearchParams(location.search).get('dev') === 'city'){
   setAct('city');   // the click-gate stays: it is what unlocks the audio context
   spawnPlayer();
 }

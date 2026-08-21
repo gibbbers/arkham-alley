@@ -74,8 +74,8 @@ post stack — the city scene is swapped onto the same `RenderPass` / `GTAOPass`
 python3 -m http.server 8100 --directory city
 ```
 
-`?act=city` boots straight into the world; **G** toggles between the cutscene
-and the city. Fly with **WASD**, drag to look, **Shift** to boost.
+Open the plain URL — it starts with the cutscene and hands off to the open
+world when the scene ends. `?dev=city` skips the cutscene (debug only).
 
 **Built so far**
 
