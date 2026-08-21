@@ -3082,6 +3082,7 @@ function updateCity(dt, t){
   updateFly(dt);
   updateGround(dt, t);
   updateSites(dt, t);
+  updateLobbies();
   // the interior only exists when you're near it — hiding the group also
   // drops its ~20 lights out of the shader
   {
@@ -4589,6 +4590,45 @@ function buildPrison(cx, cz){
     }
   }
   sbox(g, SM.bar, 4.5, 3.2, 0.3, 0, 1.9, -3+CD/2+0.2, 0, false);
+
+  /* ---- cellblock interior: long white hall, cells down both sides ---- */
+  {
+    const IN = new THREE.Group(); g.add(IN); prisonInteriors.push({group:IN, x:cx, z:cz});
+    const white = new THREE.MeshStandardMaterial({ color:0xb6b9bb, roughness:0.86,
+                    metalness:0.0, envMapIntensity:0.4 });
+    const strip = new THREE.MeshStandardMaterial({ color:0x14161a, emissive:0xeaf2ff,
+                    emissiveIntensity:3.4, roughness:0.4 });
+    const bunk  = new THREE.MeshStandardMaterial({ color:0x555a60, roughness:0.7,
+                    metalness:0.3, envMapIntensity:0.7 });
+    const HALLW = 4.6, CELLD = 3.2, IH = 3.9, z0 = -3;
+    sbox(IN, white, CW-1.0, 0.22, HALLW, 0, 0.42, z0, 0, false);          // hall floor
+    sbox(IN, white, CW-1.0, 0.22, HALLW, 0, IH, z0, 0, false);            // hall ceiling
+    for(let i=0;i<7;i++)
+      sbox(IN, strip, 2.6, 0.10, 0.55, -CW/2+3.2+i*4.4, IH-0.14, z0, 0, false);
+    for(const sz of [-1, 1]){
+      const wz = z0 + sz*HALLW*0.5;
+      for(let i=0;i<8;i++){
+        const px = -CW/2 + 1.2 + i*4.2;
+        sbox(IN, white, 0.9, IH-0.3, 0.28, px, IH*0.5+0.3, wz, 0, false);  // pier
+        // barred cell front
+        for(let b=0;b<6;b++)
+          scyl(IN, SM.bar, 0.052,0.052, IH-0.6, 5, px+0.75+b*0.52, IH*0.5+0.25, wz, false);
+        sbox(IN, SM.bar, 3.4, 0.14, 0.14, px+2.0, IH-0.35, wz, 0, false);
+        // cell behind it
+        const cz2 = wz + sz*CELLD*0.5;
+        sbox(IN, white, 3.4, 0.2, CELLD, px+2.0, 0.42, cz2, 0, false);
+        sbox(IN, white, 3.4, IH-0.3, 0.2, px+2.0, IH*0.5+0.3, wz + sz*CELLD, 0, false);
+        sbox(IN, bunk, 2.4, 0.16, 0.85, px+2.0, 1.05, cz2 + sz*0.9, 0, false);
+        sbox(IN, bunk, 2.4, 0.16, 0.85, px+2.0, 1.95, cz2 + sz*0.9, 0, false);
+        if(rand() < 0.55){
+          const inmate = new THREE.Mesh(GEO_PED, ORANGE);
+          inmate.position.set(px+2.0 + rr(-0.6,0.6), 0.52, cz2 - sz*0.5);
+          inmate.rotation.y = sz > 0 ? 0 : Math.PI;
+          IN.add(inmate);
+        }
+      }
+    }
+  }
   for(const [fx,fz] of [[-14,14],[14,14]]) floodPole(g, fx, fz, fx*0.3, 2, 10);
   for(let i=0;i<18;i++)
     sitePeople.push({ x:cx+rr(-18,18)*PRISON_S, z:cz+rr(6,20)*PRISON_S, r:rr(2,6),
@@ -4733,6 +4773,7 @@ function buildStore(cx, cz){
 }
 
 const prisonLights = [];
+const prisonInteriors = [];
 
 /* ---- place them and build the crowd ------------------------------------- */
 (function placeSites(){
@@ -4762,6 +4803,10 @@ function updateSites(dt, t){
     const near = Math.hypot(cityCam.position.x-s.x, cityCam.position.z-s.z) < s.near;
     if(s.group.visible !== near) s.group.visible = near;
   }
+  for(const pi of prisonInteriors){
+    const near = Math.hypot(cityCam.position.x-pi.x, cityCam.position.z-pi.z) < 150;
+    if(pi.group.visible !== near) pi.group.visible = near;
+  }
   for(const p of prisonLights){                 // sweeping searchlights
     const a = t*0.35 + p.ph;
     p.sp.target.position.set(Math.sin(a)*22, 0, Math.cos(a)*22);
@@ -4781,11 +4826,110 @@ function updateSites(dt, t){
   }
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   18. BUILDING LOBBIES — a pool of three, moved to whichever doors are nearest
+   ══════════════════════════════════════════════════════════════════════════ */
+/* 690 real interiors is not affordable; three that follow the player is. Each
+   is lit by emissive panels plus a single point light, so the shader only ever
+   carries three extra lights no matter how big the city gets. */
+const LOBBY_POOL = 3;
+const lobbies = [];
+
+const LB = {
+  floor : new THREE.MeshPhysicalMaterial({ color:0x8e8a82, roughness:0.10, metalness:0.02,
+            envMapIntensity:1.6, clearcoat:0.6, clearcoatRoughness:0.08 }),
+  wall  : new THREE.MeshStandardMaterial({ color:0x6f6a63, roughness:0.9, envMapIntensity:0.4 }),
+  panel : new THREE.MeshStandardMaterial({ color:0x1a1710, emissive:0xfff0d2,
+            emissiveIntensity:3.4, roughness:0.4 }),
+  desk  : new THREE.MeshStandardMaterial({ color:0x3a2519, roughness:0.45, metalness:0.05, envMapIntensity:0.9 }),
+  stone : new THREE.MeshStandardMaterial({ color:0x9a958c, roughness:0.35, metalness:0.05, envMapIntensity:1.2 }),
+  brass : new THREE.MeshStandardMaterial({ color:0xb08a3c, roughness:0.26, metalness:0.95, envMapIntensity:1.7 }),
+  lift  : new THREE.MeshStandardMaterial({ color:0x6d737b, roughness:0.22, metalness:0.92, envMapIntensity:1.8 }),
+  chair : new THREE.MeshStandardMaterial({ color:0x22303f, roughness:0.7, envMapIntensity:0.6 }),
+  plant : new THREE.MeshStandardMaterial({ color:0x27412a, roughness:0.9, envMapIntensity:0.4 }),
+  call  : new THREE.MeshStandardMaterial({ color:0x120c04, emissive:0xffb347, emissiveIntensity:4, roughness:0.4 })
+};
+
+function makeLobby(){
+  const g = new THREE.Group();
+  const W = 11, D = 13, H = 5.0;
+  const put = (mat,w,h,d,x,y,z,ry)=>{
+    const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+    m.position.set(x,y,z); if(ry) m.rotation.y=ry;
+    m.receiveShadow = true; g.add(m); return m;
+  };
+  put(LB.floor, W, 0.2, D, 0, 0.1, -D/2);
+  put(LB.wall,  W, 0.3, D, 0, H, -D/2);
+  put(LB.wall,  0.3, H, D, -W/2, H/2, -D/2);
+  put(LB.wall,  0.3, H, D,  W/2, H/2, -D/2);
+  put(LB.wall,  W, H, 0.3, 0, H/2, -D);
+  // ceiling light panels — the whole room is lit from these
+  for(const pz of [-3.2, -6.5, -9.8]) put(LB.panel, W-2.4, 0.14, 1.5, 0, H-0.16, pz);
+  // reception desk with a clerk behind it
+  put(LB.desk, 4.6, 1.05, 1.1, -1.2, 0.72, -5.2);
+  put(LB.stone, 5.0, 0.12, 1.35, -1.2, 1.30, -5.2);
+  put(LB.brass, 0.5, 0.06, 0.9, 0.6, 1.40, -5.2);
+  const clerk = new THREE.Mesh(GEO_PED, coatMats[1]);
+  clerk.position.set(-1.2, 0.2, -6.3); clerk.rotation.y = 0; g.add(clerk);
+  g.userData.clerk = clerk;
+  // waiting chairs
+  for(let i=0;i<4;i++){
+    put(LB.chair, 0.75, 0.12, 0.75, W/2-1.4, 0.62, -2.4 - i*1.25);
+    put(LB.chair, 0.75, 0.75, 0.12, W/2-1.05, 0.98, -2.4 - i*1.25);
+    put(LB.lift, 0.08, 0.55, 0.08, W/2-1.7, 0.3, -2.4 - i*1.25);
+  }
+  // lift bank on the back wall
+  for(const lx of [-2.6, 2.6]){
+    put(LB.brass, 2.35, 3.3, 0.14, lx, 1.65, -D+0.22);
+    put(LB.lift,  2.05, 3.05, 0.10, lx, 1.55, -D+0.30);
+    put(LB.brass, 0.06, 3.05, 0.12, lx, 1.55, -D+0.36);
+    put(LB.call,  0.3, 0.16, 0.08, lx + 1.45, 1.9, -D+0.34);
+    put(LB.brass, 1.5, 0.3, 0.12, lx, 3.45, -D+0.34);
+  }
+  // planters and a rug
+  for(const px of [-W/2+1.2, W/2-1.2]){
+    put(LB.stone, 0.8, 0.6, 0.8, px, 0.4, -D+1.4);
+    const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 0), LB.plant);
+    bush.position.set(px, 1.1, -D+1.4); g.add(bush);
+  }
+  put(LB.chair, 5.0, 0.03, 3.2, 0, 0.22, -2.6);
+  const pl = new THREE.PointLight(0xffe6c0, 60, 22, 2);
+  pl.position.set(0, H-0.9, -D*0.45); g.add(pl);
+  g.visible = false;
+  return g;
+}
+for(let i=0;i<LOBBY_POOL;i++){ const g = makeLobby(); cityScene.add(g); lobbies.push(g); }
+
+/* pick the nearest doors and park the pool on them */
+let _lobbyTick = 0;
+const _lobbyBest = [];
+function updateLobbies(){
+  if((_lobbyTick++ % 12) !== 0) return;
+  const px = cityCam.position.x, pz = cityCam.position.z;
+  _lobbyBest.length = 0;
+  for(let i=0;i<cityDoors.length;i++){
+    const d = cityDoors[i];
+    const dx = d.x-px, dz = d.z-pz, dd = dx*dx + dz*dz;
+    if(dd > 90*90) continue;
+    if(_lobbyBest.length < LOBBY_POOL){ _lobbyBest.push({d, dd}); _lobbyBest.sort((a,b)=>a.dd-b.dd); }
+    else if(dd < _lobbyBest[LOBBY_POOL-1].dd){
+      _lobbyBest[LOBBY_POOL-1] = {d, dd}; _lobbyBest.sort((a,b)=>a.dd-b.dd);
+    }
+  }
+  for(let i=0;i<LOBBY_POOL;i++){
+    const g = lobbies[i], b = _lobbyBest[i];
+    if(!b){ if(g.visible) g.visible = false; continue; }
+    g.position.set(b.d.x, b.d.y, b.d.z);
+    if(!g.visible) g.visible = true;
+  }
+}
+
 window.GOTHAM = {
   get act(){ return ACT; }, setAct:(a)=>setAct(a),
   scene:()=>cityScene, cam:()=>cityCam, CITY,
   roofs:()=>cityRoofs, colliders:()=>cityColliders, HALL, rooms:()=>HALL_ROOMS,
-  sites:()=>siteGroups, RESERVED,
+  sites:()=>siteGroups, RESERVED, doors:()=>cityDoors, lobbies:()=>lobbies,
   view(p, look){ cityCam.position.set(p[0],p[1],p[2]);
     if(look){ const d=new THREE.Vector3(look[0]-p[0],look[1]-p[1],look[2]-p[2]).normalize();
       fly.yaw = Math.atan2(d.x, d.z); fly.pitch = Math.asin(clamp(d.y,-1,1)); }
