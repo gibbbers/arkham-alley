@@ -2971,12 +2971,19 @@ const RESERVED = {
   schools: [{c:6,r:3},{c:14,r:16}],
   prison : {c:2, r:6},
   park   : {c:12,r:12},
-  lots   : [{c:3,r:4},{c:14,r:6},{c:6,r:16},{c:16,r:13},{c:11,r:2},{c:2,r:11}]
+  police : [{c:7,r:12},{c:15,r:8}],
+  dealers: [{c:11,r:5},{c:5,r:9}],
+  stores : [{c:8,r:1},{c:1,r:14},{c:17,r:17},{c:13,r:3},{c:3,r:18},
+            {c:18,r:9},{c:10,r:17},{c:6,r:7},{c:16,r:1},{c:1,r:2}],
+  lots   : [{c:3,r:4},{c:14,r:6},{c:6,r:16},{c:16,r:13},{c:11,r:2},{c:2,r:11},
+            {c:12,r:8},{c:8,r:14},{c:18,r:5}]
 };
 function blockReserved(c, r){
   const hit = b => b.c===c && b.r===r;
   return hit(RESERVED.hall) || hit(RESERVED.prison) || hit(RESERVED.park) ||
-         RESERVED.courts.some(hit) || RESERVED.schools.some(hit) || RESERVED.lots.some(hit);
+         RESERVED.courts.some(hit) || RESERVED.schools.some(hit) ||
+         RESERVED.police.some(hit) || RESERVED.dealers.some(hit) ||
+         RESERVED.stores.some(hit) || RESERVED.lots.some(hit);
 }
 
 (function sidewalks(){
@@ -3237,6 +3244,42 @@ const facadeMats = FACADE_STYLES.map(st=>{
 const crownMat = new THREE.MeshStandardMaterial({
   color:0x121016, emissive:0xffc27a, emissiveIntensity:0.95, roughness:0.5, metalness:0.1
 });
+/* Ground-floor shopfront strip. Merged into the city mesh, so giving all ~690
+   masses a lit first floor and a door costs geometry, not draw calls. */
+const shopTex = (function(){
+  const W=384, H=128, c=cv(W,H), x=c.getContext('2d',{willReadFrequently:true});
+  x.fillStyle='#1a1712'; x.fillRect(0,0,W,H);
+  for(let i=0;i<8;i++){
+    const px = 6 + i*(W/8), pw = W/8 - 12;
+    x.fillStyle = '#0c0f14'; x.fillRect(px, 20, pw, H-46);
+    x.fillStyle = '#2b2620'; x.fillRect(px-3, 16, pw+6, 5);
+    x.fillStyle = '#2b2620'; x.fillRect(px-3, H-28, pw+6, 5);
+  }
+  x.fillStyle='#3a332a'; x.fillRect(0, H-24, W, 24);
+  return texFrom(c, 1, 1, true);
+})();
+const shopEmis = (function(){
+  const W=384, H=128, c=cv(W,H), x=c.getContext('2d',{willReadFrequently:true});
+  x.fillStyle='#000'; x.fillRect(0,0,W,H);
+  const cols=['#ffd9a0','#ffc27a','#cfe0ff','#ffe8c4','#9fe8c0'];
+  for(let i=0;i<8;i++){
+    if(rand() < 0.22) continue;                    // a few units dark
+    const px = 6 + i*(W/8), pw = W/8 - 12;
+    x.globalAlpha = 0.55 + rand()*0.45;
+    x.fillStyle = cols[(rand()*cols.length)|0];
+    x.fillRect(px, 20, pw, H-46);
+    x.globalAlpha = 1;
+  }
+  return texFrom(c, 1, 1, true);
+})();
+const shopMat = new THREE.MeshStandardMaterial({
+  map:shopTex, emissiveMap:shopEmis, emissive:0xffffff, emissiveIntensity:1.9,
+  roughness:0.55, metalness:0.05, envMapIntensity:0.9
+});
+const doorMat = new THREE.MeshStandardMaterial({
+  color:0x14161c, roughness:0.22, metalness:0.35, envMapIntensity:1.6
+});
+
 const trimMat = new THREE.MeshStandardMaterial({
   color:0x4a4a4e, roughness:0.92, metalness:0.03, envMapIntensity:0.35,
   map:cloneSet(TEX.concrete, 3, 3).map
@@ -3314,6 +3357,7 @@ const rigMat = new THREE.MeshStandardMaterial({ color:0x2a2d31, roughness:0.55, 
 /* ---- the generator -------------------------------------------------------- */
 let cityBeacons = [];
 const cityColliders = [];        // {x,z,hw,hd,top} — collision + grapple targets
+const cityDoors     = [];        // {x,y,z,w} — entrances, for the use-prompt later
 const cityRoofs     = [];        // {x,y,z} rooftop centres, for spawn/anchor picking
 const LANDMARKS = [ {c:10,r:10,h:300}, {c: 8,r:11,h:246}, {c:12,r: 9,h:262},
                     {c:11,r: 7,h:228}, {c: 7,r: 8,h:238}, {c:13,r:12,h:214},
@@ -3330,7 +3374,7 @@ function facadeCyl(rTop, rBot, h, seg){
 
 (function buildSkyline(){
   const buckets = FACADE_STYLES.map(()=>[]);
-  const trims = [], roofs = [], crowns = [];
+  const trims = [], roofs = [], crowns = [], shops = [], doors = [];
   const xf = { water:[], garg:[], ac:[], mast:[] };
   const M = new THREE.Matrix4(), Q = new THREE.Quaternion(),
         P = new THREE.Vector3(), S = new THREE.Vector3(1,1,1);
@@ -3360,9 +3404,29 @@ function facadeCyl(rTop, rBot, h, seg){
     }
     return h+0.95;
   }
+  function shopBand(x, z, w, d){
+    const SH = 4.6;
+    for(const [ox,oz,bw,bd,rot] of [[0, d*0.5+0.16, w, 0.32, 0], [0, -(d*0.5+0.16), w, 0.32, 0],
+                                    [w*0.5+0.16, 0, 0.32, d, 1], [-(w*0.5+0.16), 0, 0.32, d, 1]]){
+      const b = new THREE.BoxGeometry(bw, SH, bd);
+      const uv = b.attributes.uv;
+      const su = rot ? bd : bw;
+      for(let i=0;i<uv.count;i++) uv.setXY(i, uv.getX(i)*su/9.0, uv.getY(i));
+      b.translate(x+ox, 0.36 + SH*0.5, z+oz);
+      shops.push(b);
+    }
+    // entrance on the long face
+    const dz = d*0.5 + 0.34;
+    const dr = new THREE.BoxGeometry(2.6, 3.4, 0.30); dr.translate(x, 0.36+1.7, z+dz);
+    doors.push(dr);
+    const jamb = new THREE.BoxGeometry(3.3, 3.9, 0.22); jamb.translate(x, 0.36+1.95, z+dz-0.08);
+    trims.push(jamb);
+    cityDoors.push({x:x, y:0.36, z:z+dz, w:2.6});
+  }
   function addMass(x, z, w, d, h, variant){
     const g = facadeBox(w, h, d); g.translate(x, h*0.5, z);
     buckets[variant].push(g);
+    shopBand(x, z, w, d);
     return cap(x, z, w, d, h);
   }
   function dressRoof(x, z, w, d, top){
@@ -3439,6 +3503,7 @@ function facadeCyl(rTop, rBot, h, seg){
       const g2 = facadeBox(tw, th, td); g2.translate(ctr.x, h+th*0.5, ctr.z);
       buckets[variant].push(g2);
       crownBand(ctr.x, ctr.z, tw+0.8, td+0.8, h+th-1.2, 0.40);
+      shopBand(ctr.x, ctr.z, w, d);
       const top = cap(ctr.x, ctr.z, tw, td, h+th, {});
       cityColliders.push({x:ctr.x, z:ctr.z, hw:w*0.5, hd:d*0.5, top:h});
       dressRoof(ctr.x, ctr.z, tw, td, top);
@@ -3449,6 +3514,7 @@ function facadeCyl(rTop, rBot, h, seg){
       const variant = rand()<0.5 ? GREY[(rand()*2)|0] : (rand()*6)|0;
       const g = facadeCyl(rad*0.88, rad, h, seg); g.translate(ctr.x, h*0.5, ctr.z);
       buckets[variant].push(g);
+      shopBand(ctr.x, ctr.z, rad*1.5, rad*1.5);
       const ring = new THREE.CylinderGeometry(rad*1.06, rad*1.06, 1.0, seg);
       ring.translate(ctr.x, h+0.4, ctr.z); trims.push(ring);
       const disc = new THREE.CylinderGeometry(rad*0.9, rad*0.9, 0.3, seg);
@@ -3463,6 +3529,7 @@ function facadeCyl(rTop, rBot, h, seg){
       const variant = GREY[(rand()*2)|0];
       const g = facadeBox(w, h, d); g.translate(ctr.x, h*0.5, ctr.z);
       buckets[variant].push(g);
+      shopBand(ctr.x, ctr.z, w, d);
       const top = cap(ctr.x, ctr.z, w, d, h);
       for(const sx of [-1,1]){
         const tw = w*0.20, tt = h*rr(0.30,0.46);
@@ -3490,6 +3557,7 @@ function facadeCyl(rTop, rBot, h, seg){
       const variant = (rand()*6)|0;
       for(let sN=0; sN<steps; sN++){
         const sh = H*(sN===0 ? 0.55 : 0.45/(steps-1));
+        if(sN === 0) shopBand(ctr.x, ctr.z, w, d);
         const g = facadeBox(w, sh, d); g.translate(ctr.x, y+sh*0.5, ctr.z);
         buckets[variant].push(g);
         const cr = new THREE.BoxGeometry(w+1.1, 0.95, d+1.1); cr.translate(ctr.x, y+sh+0.34, ctr.z);
@@ -3524,6 +3592,14 @@ function facadeCyl(rTop, rBot, h, seg){
   if(crowns.length){
     const m = new THREE.Mesh(mergeGeometries(crowns), crownMat);
     cityScene.add(m);
+  }
+  if(shops.length){
+    const m = new THREE.Mesh(mergeGeometries(shops), shopMat);
+    m.castShadow = false; m.receiveShadow = true; cityScene.add(m);
+  }
+  if(doors.length){
+    const m = new THREE.Mesh(mergeGeometries(doors), doorMat);
+    m.receiveShadow = true; cityScene.add(m);
   }
   const inst = (geo, mat, list, shadow)=>{
     if(!list.length) return null;
@@ -4299,6 +4375,8 @@ const HALL_ROOMS = [];      // walkable volumes, handed to collision in stage 6
 /* ══════════════════════════════════════════════════════════════════════════
    17. NEIGHBOURHOOD SITES — courts, schools, prison, park
    ══════════════════════════════════════════════════════════════════════════ */
+const SITE_S = 1.5;              // every site except City Hall, which has its own
+const PRISON_S = 2.4;
 const SITE_PED_IMS = [];
 const sitePeople = [];       // {x,z,r,sp,ph,mat,mode}
 const siteGroups = [];       // {group, x, z, near}  — gated by distance
@@ -4356,7 +4434,11 @@ const SM = {
   bar   : new THREE.MeshStandardMaterial({ color:0x2f3237, roughness:0.45, metalness:0.9, envMapIntensity:1.0 }),
   razor : new THREE.MeshStandardMaterial({ color:0x9aa2ab, roughness:0.35, metalness:0.95, envMapIntensity:1.4 }),
   grass : new THREE.MeshStandardMaterial({ color:0x2b3a29, roughness:0.95, metalness:0.0, envMapIntensity:0.35 }),
-  bench : new THREE.MeshStandardMaterial({ color:0x3d2a1c, roughness:0.75, metalness:0.0, envMapIntensity:0.5 })
+  bench : new THREE.MeshStandardMaterial({ color:0x3d2a1c, roughness:0.75, metalness:0.0, envMapIntensity:0.5 }),
+  policeA:new THREE.MeshStandardMaterial({ color:0x1b2740, roughness:0.3, metalness:0.6, envMapIntensity:1.3 }),
+  policeB:new THREE.MeshStandardMaterial({ color:0xd8dde4, roughness:0.32, metalness:0.5, envMapIntensity:1.2 }),
+  copRed :new THREE.MeshStandardMaterial({ color:0x220608, emissive:0xff2418, emissiveIntensity:5, roughness:0.35 }),
+  copBlue:new THREE.MeshStandardMaterial({ color:0x040d22, emissive:0x2f7dff, emissiveIntensity:5, roughness:0.35 })
 };
 const ORANGE = new THREE.MeshStandardMaterial({ color:0xc9600f, roughness:0.9, envMapIntensity:0.6 });
 const SCHOOLKID = [0x2c3f6b, 0x6b2c3f, 0x2f5a3a, 0x5a4a2f]
@@ -4395,7 +4477,7 @@ function floodPole(g, x, z, aimX, aimZ, h){
   const lamp=new THREE.Mesh(new THREE.BoxGeometry(1.25,0.32,0.16), SM.flood);
   lamp.position.set(x, h+0.1, z); lamp.rotation.y = Math.atan2(aimX-x, aimZ-z);
   g.add(lamp);
-  const sp=new THREE.SpotLight(0xdfe8ff, 900, 60, 0.62, 0.75, 2);
+  const sp=new THREE.SpotLight(0xdfe8ff, 900*SITE_S*SITE_S, 60*SITE_S, 0.62, 0.75, 2);
   sp.position.set(x, h, z); sp.target.position.set(aimX, 0, aimZ);
   g.add(sp, sp.target);
   return sp;
@@ -4403,7 +4485,7 @@ function floodPole(g, x, z, aimX, aimZ, h){
 
 /* ---- basketball court ---------------------------------------------------- */
 function buildCourt(cx, cz){
-  const g = new THREE.Group(); g.position.set(cx, 0, cz); cityScene.add(g);
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
   sbox(g, SM.conc, 44, 0.30, 34, 0, 0.15, 0, 0, false);
   const court = new THREE.Mesh(new THREE.PlaneGeometry(30, 17), SM.court);
   court.rotation.x = -Math.PI/2; court.position.y = 0.32;
@@ -4429,8 +4511,8 @@ function buildCourt(cx, cz){
     floodPole(g, fx, fz, fx*0.2, fz*0.2, 9.5);
   for(let i=0;i<4;i++)                             // bleachers
     sbox(g, SM.conc, 16, 0.45, 1.5, 0, 0.45+i*0.45, 13.2+i*1.5);
-  for(let i=0;i<7;i++)
-    sitePeople.push({ x:cx+rr(-12,12), z:cz+rr(-7,7), r:rr(1.5,4.5),
+  for(let i=0;i<9;i++)
+    sitePeople.push({ x:cx+rr(-12,12)*SITE_S, z:cz+rr(-7,7)*SITE_S, r:rr(1.5,4.5),
                       sp:rr(0.5,1.5), ph:rand()*6.28, mat:coatMats[(rand()*coatMats.length)|0] });
   siteGroups.push({group:g, x:cx, z:cz, near:170});
   return g;
@@ -4438,7 +4520,7 @@ function buildCourt(cx, cz){
 
 /* ---- school -------------------------------------------------------------- */
 function buildSchool(cx, cz){
-  const g = new THREE.Group(); g.position.set(cx, 0, cz); cityScene.add(g);
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
   sbox(g, SM.conc, 50, 0.30, 40, 0, 0.15, 0, 0, false);
   const W=40, D=16, FL=4.4, N=3;
   sbox(g, SM.brickS, W, FL*N, D, 0, FL*N/2 + 0.3, -4);
@@ -4460,8 +4542,8 @@ function buildSchool(cx, cz){
   fenceRun(g, -24, 16, 24, 16, 2.6);
   for(const bx of [-14, 0, 14]) sbox(g, SM.bench, 2.4, 0.14, 0.7, bx, 0.75, 11, 0);
   for(const [fx,fz] of [[-18,10],[18,10]]) floodPole(g, fx, fz, 0, 2, 8.0);
-  for(let i=0;i<8;i++)
-    sitePeople.push({ x:cx+rr(-20,20), z:cz+rr(4,14), r:rr(1.5,5),
+  for(let i=0;i<11;i++)
+    sitePeople.push({ x:cx+rr(-20,20)*SITE_S, z:cz+rr(4,14)*SITE_S, r:rr(1.5,5),
                       sp:rr(0.5,1.4), ph:rand()*6.28, mat:SCHOOLKID[(rand()*4)|0] });
   siteGroups.push({group:g, x:cx, z:cz, near:200});
   return g;
@@ -4469,7 +4551,7 @@ function buildSchool(cx, cz){
 
 /* ---- prison -------------------------------------------------------------- */
 function buildPrison(cx, cz){
-  const g = new THREE.Group(); g.position.set(cx, 0, cz); cityScene.add(g);
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(PRISON_S); cityScene.add(g);
   const R = 25, WH = 7.5;
   sbox(g, SM.conc, R*2, 0.30, R*2, 0, 0.15, 0, 0, false);
   for(const [x0,z0,x1,z1] of [[-R,-R,R,-R],[R,-R,R,R],[R,R,-R,R],[-R,R,-R,-R]]){
@@ -4489,7 +4571,7 @@ function buildPrison(cx, cz){
     sbox(g, SM.conc, 5.0, 2.6, 5.0, tx, 13.3, tz);
     sbox(g, SM.darkWin, 4.6, 1.3, 4.6, tx, 13.4, tz, 0, false);
     sbox(g, SM.conc, 5.8, 0.4, 5.8, tx, 14.8, tz);
-    const sp=new THREE.SpotLight(0xfff2d4, 1400, 90, 0.20, 0.6, 2);
+    const sp=new THREE.SpotLight(0xfff2d4, 1400*PRISON_S*PRISON_S, 90*PRISON_S, 0.20, 0.6, 2);
     sp.position.set(tx, 13.0, tz); sp.target.position.set(0, 0, 0);
     g.add(sp, sp.target);
     prisonLights.push({sp, tx, tz, ph:rand()*6.28});
@@ -4508,16 +4590,16 @@ function buildPrison(cx, cz){
   }
   sbox(g, SM.bar, 4.5, 3.2, 0.3, 0, 1.9, -3+CD/2+0.2, 0, false);
   for(const [fx,fz] of [[-14,14],[14,14]]) floodPole(g, fx, fz, fx*0.3, 2, 10);
-  for(let i=0;i<10;i++)
-    sitePeople.push({ x:cx+rr(-18,18), z:cz+rr(6,20), r:rr(2,6),
+  for(let i=0;i<18;i++)
+    sitePeople.push({ x:cx+rr(-18,18)*PRISON_S, z:cz+rr(6,20)*PRISON_S, r:rr(2,6),
                       sp:rr(0.4,1.1), ph:rand()*6.28, mat:ORANGE });
-  siteGroups.push({group:g, x:cx, z:cz, near:230});
+  siteGroups.push({group:g, x:cx, z:cz, near:330});
   return g;
 }
 
 /* ---- pocket park --------------------------------------------------------- */
 function buildPark(cx, cz){
-  const g = new THREE.Group(); g.position.set(cx, 0, cz); cityScene.add(g);
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
   sbox(g, SM.grass, 50, 0.32, 50, 0, 0.16, 0, 0, false);
   const path = new THREE.Mesh(new THREE.PlaneGeometry(50, 5), SM.conc);
   path.rotation.x = -Math.PI/2; path.position.y = 0.34; path.receiveShadow = true; g.add(path);
@@ -4535,12 +4617,121 @@ function buildPark(cx, cz){
     sbox(g, SM.bench, 2.6, 0.7, 0.12, bx, 1.15, bz - 0.32, ry, false);
   }
   for(const [fx,fz] of [[-16,-16],[16,16]]) floodPole(g, fx, fz, 0, 0, 7.5);
-  for(let i=0;i<6;i++)
-    sitePeople.push({ x:cx+rr(-18,18), z:cz+rr(-18,18), r:rr(2,7),
+  for(let i=0;i<9;i++)
+    sitePeople.push({ x:cx+rr(-18,18)*SITE_S, z:cz+rr(-18,18)*SITE_S, r:rr(2,7),
                       sp:rr(0.5,1.2), ph:rand()*6.28, mat:coatMats[(rand()*coatMats.length)|0] });
   siteGroups.push({group:g, x:cx, z:cz, near:180});
   return g;
 }
+
+/* ---- police station ------------------------------------------------------ */
+function buildPolice(cx, cz){
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
+  sbox(g, SM.conc, 44, 0.30, 32, 0, 0.15, 0, 0, false);
+  const W=32, D=15, FL=4.3;
+  sbox(g, SM.conc, W, FL*3, D, 0, FL*1.5+0.3, -3);
+  sbox(g, SM.conc, W+1.4, 0.9, D+1.4, 0, FL*3+0.75, -3);
+  for(let f=1; f<3; f++) for(let i=0;i<8;i++){
+    const wx=-W/2+2.4+i*4.0;
+    sbox(g, rand()<0.5?SM.litWin:SM.darkWin, 2.2, 2.2, 0.2, wx, 1.9+f*FL, -3+D/2, 0, false);
+  }
+  // glazed ground floor with a visible front desk
+  sbox(g, SM.darkWin, W-3, 3.6, 0.2, 0, 2.1, -3+D/2, 0, false);
+  sbox(g, SM.bench, 5.0, 1.15, 1.2, -3, 0.9, -3+D/2-2.6);        // desk
+  sbox(g, HM ? HM.brass : SM.rim, 5.2, 0.12, 1.4, -3, 1.52, -3+D/2-2.6, 0, false);
+  for(const bx of [4,7,10]) sbox(g, SM.bench, 0.7, 0.85, 0.7, bx, 0.72, -3+D/2-2.0);
+  sitePeople.push({x:cx-3*SITE_S, z:cz+(-3+D/2-3.6)*SITE_S, r:0.35, sp:0.25, ph:rand()*6.28,
+                   mat:coatMats[0]});
+  // blue lamp and signage over the entrance
+  const sign = sbox(g, SM.conc, 9, 1.5, 0.4, 0, FL*3+2.2, -3+D/2);
+  const blue = new THREE.MeshStandardMaterial({color:0x0a1424, emissive:0x2f7dff,
+                 emissiveIntensity:5.5, roughness:0.4});
+  sbox(g, blue, 8.4, 1.0, 0.16, 0, FL*3+2.2, -3+D/2+0.28, 0, false);
+  for(const sx of [-1,1]){
+    const gl=new THREE.Mesh(new THREE.SphereGeometry(0.34,10,8), blue);
+    gl.position.set(sx*5.2, 4.6, -3+D/2+0.4); g.add(gl);
+  }
+  for(let i=0;i<4;i++) sbox(g, SM.conc, W*0.5-i*0.5, 0.26, 1.1, 0, 0.3+i*0.26, -3+D/2+2.2+i*1.1, 0, false);
+  // patrol cars angled out front
+  for(let i=0;i<4;i++){
+    const px=-12+i*8, pz=11;
+    const car=new THREE.Mesh(GEO_CAR, i%2 ? SM.policeA : SM.policeB);
+    car.position.set(px, 0.34, pz); car.rotation.y = Math.PI + rr(-0.1,0.1);
+    car.castShadow=true; g.add(car);
+    const bar=new THREE.Mesh(new THREE.BoxGeometry(1.1,0.16,0.3),
+      i%2 ? SM.copRed : SM.copBlue);
+    bar.position.set(px, 1.8, pz); g.add(bar);
+  }
+  for(const [fx,fz] of [[-16,12],[16,12]]) floodPole(g, fx, fz, 0, 2, 8.5);
+  for(let i=0;i<5;i++)
+    sitePeople.push({x:cx+rr(-16,16)*SITE_S, z:cz+rr(6,14)*SITE_S, r:rr(1,3.5),
+                     sp:rr(0.4,1.1), ph:rand()*6.28, mat:coatMats[(rand()*coatMats.length)|0]});
+  siteGroups.push({group:g, x:cx, z:cz, near:210});
+}
+
+/* ---- car dealership: open glass showroom ---------------------------------- */
+function buildDealer(cx, cz){
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
+  sbox(g, SM.conc, 46, 0.30, 34, 0, 0.15, 0, 0, false);
+  const W=26, D=16, H=7.5;
+  sbox(g, SM.conc, W+1.2, 0.5, D+1.2, 0, H+0.55, -5);            // roof slab
+  for(const sx of [-1,1]) scyl(g, SM.post, 0.22,0.24, H, 8, sx*(W/2-0.6), H/2+0.3, -5-D/2+0.6);
+  sbox(g, SM.conc, W, H, 0.6, 0, H/2+0.3, -5-D/2);               // back wall
+  for(const sx of [-1,1]) sbox(g, SM.conc, 0.6, H, D, sx*W/2, H/2+0.3, -5);
+  // full-height glazing, showroom visible through it
+  sbox(g, SM.darkWin, W-1.2, H-0.8, 0.16, 0, H/2+0.3, -5+D/2, 0, false);
+  const glow = new THREE.MeshStandardMaterial({color:0x101418, emissive:0xdfeaff,
+                 emissiveIntensity:2.6, roughness:0.4});
+  sbox(g, glow, W-2, 0.5, D-2, 0, H+0.1, -5, 0, false);           // ceiling light panel
+  const showFloor = new THREE.Mesh(new THREE.PlaneGeometry(W-1.5, D-1.5), HM ? HM.marble : SM.conc);
+  showFloor.rotation.x=-Math.PI/2; showFloor.position.set(0,0.33,-5);
+  showFloor.receiveShadow=true; g.add(showFloor);
+  for(const [ax,az,ay] of [[-6,-7,0.6],[6,-7,-0.5],[0,-2,2.4]]){
+    const car=new THREE.Mesh(GEO_CAR, bodyMats[(rand()*bodyMats.length)|0]);
+    car.position.set(ax,0.36,az); car.rotation.y=ay; car.castShadow=true; g.add(car);
+  }
+  sbox(g, SM.bench, 3.0, 1.05, 1.0, 9, 0.85, -2);                 // clerk desk
+  sitePeople.push({x:cx+9*SITE_S, z:cz+(-3.4)*SITE_S, r:0.3, sp:0.2, ph:rand()*6.28, mat:coatMats[3]});
+  // forecourt stock under a lit gantry
+  for(let i=0;i<8;i++){
+    const px=-16+ (i%4)*10.5, pz=8 + ((i/4)|0)*7;
+    const car=new THREE.Mesh(GEO_CAR, bodyMats[(rand()*bodyMats.length)|0]);
+    car.position.set(px,0.34,pz); car.rotation.y=rr(-0.2,0.2); car.castShadow=true; g.add(car);
+  }
+  for(const fx of [-18, 0, 18]) floodPole(g, fx, 16, fx*0.4, 4, 8.0);
+  const banner = new THREE.MeshStandardMaterial({color:0x1a0e04, emissive:0xffb347,
+                   emissiveIntensity:4.5, roughness:0.4});
+  sbox(g, banner, 16, 1.6, 0.2, 0, H+2.0, -5+D/2, 0, false);
+  siteGroups.push({group:g, x:cx, z:cz, near:200});
+}
+
+/* ---- corner store -------------------------------------------------------- */
+function buildStore(cx, cz){
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); g.scale.setScalar(SITE_S); cityScene.add(g);
+  sbox(g, SM.conc, 34, 0.30, 26, 0, 0.15, 0, 0, false);
+  const W=20, D=13, H=5.6;
+  sbox(g, SM.brickS, W, H, D, 0, H/2+0.3, -3);
+  sbox(g, SM.conc, W+1.0, 0.7, D+1.0, 0, H+0.65, -3);
+  sbox(g, SM.darkWin, W-3, 3.2, 0.18, 0, 2.2, -3+D/2, 0, false);
+  const glow = new THREE.MeshStandardMaterial({color:0x14100a, emissive:0xffe0a8,
+                 emissiveIntensity:3.0, roughness:0.45});
+  sbox(g, glow, W-3.6, 0.35, D-2, 0, H-0.5, -3, 0, false);
+  // aisles, counter and a clerk you can see through the glass
+  for(let i=0;i<3;i++) sbox(g, SM.bench, 1.0, 1.7, D-5, -5+i*4.4, 1.15, -4);
+  sbox(g, SM.bench, 4.2, 1.05, 1.0, 6, 0.85, -3+D/2-2.4);
+  sitePeople.push({x:cx+6*SITE_S, z:cz+(-3+D/2-3.6)*SITE_S, r:0.3, sp:0.22, ph:rand()*6.28,
+                   mat:coatMats[(rand()*coatMats.length)|0]});
+  const sign = new THREE.MeshStandardMaterial({color:0x18060a, emissive:0xff4d6a,
+                 emissiveIntensity:5.0, roughness:0.4});
+  sbox(g, sign, W-6, 1.2, 0.18, 0, H+1.4, -3+D/2+0.1, 0, false);
+  sbox(g, SM.rim, W-4, 0.3, 2.2, 0, 4.2, -3+D/2+1.1, 0, false);   // awning
+  for(const bx of [-7, 7]) sbox(g, SM.bench, 2.2, 0.14, 0.7, bx, 0.75, 6);
+  for(let i=0;i<3;i++)
+    sitePeople.push({x:cx+rr(-12,12)*SITE_S, z:cz+rr(4,9)*SITE_S, r:rr(1,3),
+                     sp:rr(0.4,1.1), ph:rand()*6.28, mat:coatMats[(rand()*coatMats.length)|0]});
+  siteGroups.push({group:g, x:cx, z:cz, near:150});
+}
+
 const prisonLights = [];
 
 /* ---- place them and build the crowd ------------------------------------- */
@@ -4550,6 +4741,9 @@ const prisonLights = [];
   RESERVED.schools.forEach(b=>{ const p=at(b); buildSchool(p.x, p.z); });
   { const p=at(RESERVED.prison); buildPrison(p.x, p.z); }
   { const p=at(RESERVED.park);   buildPark(p.x, p.z); }
+  RESERVED.police .forEach(b=>{ const p=at(b); buildPolice(p.x, p.z); });
+  RESERVED.dealers.forEach(b=>{ const p=at(b); buildDealer(p.x, p.z); });
+  RESERVED.stores .forEach(b=>{ const p=at(b); buildStore(p.x, p.z); });
 
   const byMat = new Map();
   sitePeople.forEach(p=>{ if(!byMat.has(p.mat)) byMat.set(p.mat, []); byMat.get(p.mat).push(p); });
