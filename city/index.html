@@ -34,6 +34,16 @@
   #loader .b i { display:block; height:100%; width:30%; background:#8fa6c8;
                  animation:sweep 1.1s ease-in-out infinite; }
   @keyframes sweep { 0%{transform:translateX(-100%)} 100%{transform:translateX(340%)} }
+  /* ---- vitals ---- */
+  #hpwrap { position:fixed; z-index:26; left:14px; bottom:calc(7vh + 14px); width:212px; }
+  #hpbar { height:7px; background:rgba(8,10,15,.75); border:1px solid rgba(150,175,215,.22);
+           border-radius:2px; overflow:hidden; }
+  #hpfill { display:block; height:100%; width:100%; background:linear-gradient(90deg,#c8402f,#e8794a);
+            transition:width .22s ease, background .3s ease; }
+  #hplbl { margin-top:4px; font-size:8.5px; letter-spacing:.34em; color:#7f93b8; font-weight:700; }
+  #hurtfx { position:fixed; inset:0; z-index:23; pointer-events:none; opacity:0;
+            box-shadow:inset 0 0 190px rgba(190,30,25,.85); transition:opacity .5s ease; }
+
   /* ---- control legend, top-left, collapsible ---- */
   #keys { position:fixed; z-index:26; left:14px; top:calc(7vh + 12px); width:216px;
           background:linear-gradient(180deg,rgba(8,10,15,.82),rgba(6,7,11,.9));
@@ -91,8 +101,10 @@
 <canvas id="c"></canvas>
 <div class="bar top"></div><div class="bar bot"></div>
 <div id="fade"></div>
+<div id="hurtfx"></div>
 <div id="title">Alley<small>three.js — procedural cinematic test</small></div>
 <div id="stats"></div>
+<div id="hpwrap"><div id="hpbar"><i id="hpfill"></i></div><div id="hplbl">VITALS</div></div>
 <div id="keys">
   <h4><span>Controls</span><span id="keysToggle">[H]</span></h4>
   <div class="row"><span>Move</span><span class="k">W A S D</span></div>
@@ -101,10 +113,11 @@
   <div class="row"><span>Glide</span><span class="k">Hold Space</span></div>
   <div class="row"><span>Dive</span><span class="k">S while gliding</span></div>
   <div class="row"><span>Pull up</span><span class="k">release S</span></div>
+  <div class="row"><span>Climb wall</span><span class="k">Shift + into wall</span></div>
   <div class="sec"></div>
-  <div class="row"><span>Grapple</span><span class="k">Left click</span></div>
-  <div class="row"><span>Release</span><span class="k">Right click / E</span></div>
-  <div class="row"><span>Reel in / out</span><span class="k">Shift / Ctrl</span></div>
+  <div class="row"><span>Zip across</span><span class="k">Tap left click</span></div>
+  <div class="row"><span>Climb line</span><span class="k">Hold left click</span></div>
+  <div class="row"><span>Let go</span><span class="k">Right click / E</span></div>
   <div class="sec"></div>
   <div class="row"><span>View</span><span class="k">V</span></div>
   <div class="row"><span>Free cam</span><span class="k">F</span></div>
@@ -1459,7 +1472,9 @@ scene.add(batman.root);
   }
 })();
 
+let _capeTick = 0;
 function updateCape(t, speed){
+  if((_capeTick++ & 1) && ACT === 'city') return;   // cloth at half rate in play
   const pos=batman.cape.geometry.attributes.position;
   const base=batman.capeBase;
   const n=pos.count;
@@ -2383,6 +2398,9 @@ const fadeEl = document.getElementById('fade');
 const titleEl= document.getElementById('title');
 const statsEl= document.getElementById('stats');
 const keysEl = document.getElementById('keys');
+const hpWrap = document.getElementById('hpwrap'), hpFill = document.getElementById('hpfill');
+const hurtFx = document.getElementById('hurtfx');
+hpWrap.style.display = 'none';
 keysEl.style.display = 'none';
 keysEl.querySelector('h4').addEventListener('click', ()=>keysEl.classList.toggle('min'));
 let elapsed = 0, frames = 0, fpsAcc = 0, fpsT = 0, degraded = 0;
@@ -2407,7 +2425,15 @@ function frame(dtReal){
     AUDIO.duckTo(1.0);
     AUDIO.tick(dtReal);
     setCaption('');
-    keysEl.style.display = '';
+    keysEl.style.display = ''; hpWrap.style.display = '';
+    { const h = Math.max(0, player.health)/PCFG.maxHealth;
+      hpFill.style.width = (h*100).toFixed(1)+'%';
+      hpFill.style.background = h > 0.5 ? 'linear-gradient(90deg,#c8402f,#e8794a)'
+                              : h > 0.2 ? 'linear-gradient(90deg,#c8642f,#e8a74a)'
+                                        : 'linear-gradient(90deg,#8e1d18,#c8402f)';
+      if(player.hurtFlash > 0){ hurtFx.style.opacity = Math.min(0.9, player.hurtFlash);
+        player.hurtFlash = Math.max(0, player.hurtFlash - dtReal*1.6); }
+      else hurtFx.style.opacity = 0; }
     fadeEl.style.opacity = '0';              // the CSS blackout starts opaque
     titleEl.style.opacity = '0';
     grade.uniforms.uTime.value  = elapsed;
@@ -2529,7 +2555,7 @@ function frame(dtReal){
   if(t < 1.25)            fade = 1 - easeOut(t/1.25);
   else if(t > LOOP-1.6)   fade = easeOut((t-(LOOP-1.6))/1.6);
   updateAudio(t, dtReal);
-  keysEl.style.display = 'none';
+  keysEl.style.display = 'none'; hpWrap.style.display = 'none'; hurtFx.style.opacity = 0;
   grade.uniforms.uFade.value  = fade;
   grade.uniforms.uTime.value  = elapsed;
   grade.uniforms.uPunch.value = FX.punch;
@@ -2902,7 +2928,7 @@ citySky.matrixAutoUpdate = true;
 const moonLight = new THREE.DirectionalLight(0xaebfe8, 1.95);
 moonLight.position.copy(MOON_DIR).multiplyScalar(300);
 moonLight.castShadow = true;
-moonLight.shadow.mapSize.set(2048, 2048);
+moonLight.shadow.mapSize.set(1536, 1536);
 moonLight.shadow.camera.near = 20; moonLight.shadow.camera.far = 620;
 moonLight.shadow.bias = -0.0006; moonLight.shadow.normalBias = 0.06;
 moonLight.shadow.radius = 3;
@@ -3157,6 +3183,11 @@ function updateCity(dt, t){
   });
   puddleMirror.material.uniforms.uTime.value = t;
   // mirror patch and shadow volume travel with the viewer
+  /* The mirror re-renders the whole city. Street puddles are invisible from
+     altitude, so above 30m it simply stops running — which is most of the
+     time once you are swinging. */
+  const lowDown = cityCam.position.y < 30;
+  if(puddleMirror.visible !== lowDown) puddleMirror.visible = lowDown;
   puddleMirror.position.x = cityCam.position.x;
   puddleMirror.position.z = cityCam.position.z;
   moonLight.target.position.set(cityCam.position.x, 0, cityCam.position.z);
@@ -5151,9 +5182,10 @@ const PCFG = {
   glideLiftTime:1.6, glideLiftSpeed:7.0, glideLiftAccel:26,
   diveGravity:34, diveMaxSpeed:38, diveTermV:34, pullUpGain:0.62,
   grappleRange:120, grappleTravel:300, grappleCooldown:0.28, ropeMin:5,
+  zipSpeed:52, reelSpeed:16, reelPull:34,
   swingBoost:1.18, releaseBoost:4.2,
   plummetSpeed:19, plummetFov:24, plummetShake:0.42,
-  safeFall:16, fallDamage:4.6, maxHealth:100
+  safeFall:22, killDrop:300, maxHealth:100, climbSpeed:6.4
 };
 
 const player = {
@@ -5181,15 +5213,43 @@ const colKey = (i,j)=> i*1000 + j;
     }
   }
 })();
+/* Dedupe by stamp rather than indexOf — the old version was quadratic and ran
+   several times a frame. */
 const _near = [];
+let _stamp = 0;
 function collidersNear(x, z){
-  _near.length = 0;
+  _near.length = 0; _stamp++;
   const i = Math.floor(x/COL_CELL), j = Math.floor(z/COL_CELL);
   for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++){
     const list = colGrid.get(colKey(i+a, j+b));
-    if(list) for(const c of list) if(_near.indexOf(c) < 0) _near.push(c);
+    if(!list) continue;
+    for(let n=0;n<list.length;n++){
+      const c = list[n];
+      if(c._s === _stamp) continue;
+      c._s = _stamp; _near.push(c);
+    }
   }
   return _near;
+}
+/* Candidates along a ray, gathered from the cells its bounding box covers.
+   The camera calls this every frame, so walking all 700 boxes was the single
+   biggest cost while swinging. */
+const _rayCand = [];
+function collidersAlong(o, d, maxT){
+  _rayCand.length = 0; _stamp++;
+  const x1 = o.x + d.x*maxT, z1 = o.z + d.z*maxT;
+  const i0 = Math.floor(Math.min(o.x,x1)/COL_CELL) - 1, i1 = Math.floor(Math.max(o.x,x1)/COL_CELL) + 1;
+  const j0 = Math.floor(Math.min(o.z,z1)/COL_CELL) - 1, j1 = Math.floor(Math.max(o.z,z1)/COL_CELL) + 1;
+  for(let i=i0;i<=i1;i++) for(let j=j0;j<=j1;j++){
+    const list = colGrid.get(colKey(i,j));
+    if(!list) continue;
+    for(let n=0;n<list.length;n++){
+      const c = list[n];
+      if(c._s === _stamp) continue;
+      c._s = _stamp; _rayCand.push(c);
+    }
+  }
+  return _rayCand;
 }
 /* pavement stands 0.36 proud of the carriageway */
 function pavementAt(x, z){
@@ -5215,6 +5275,7 @@ function resolveWalls(p){
     const dx = p.x - c.x, dz = p.z - c.z;
     const ox = c.hw + r - Math.abs(dx), oz = c.hd + r - Math.abs(dz);
     if(ox > 0 && oz > 0){
+      player.touchWall = true;
       if(ox < oz){ p.x = c.x + Math.sign(dx||1)*(c.hw + r); player.vel.x = 0; }
       else       { p.z = c.z + Math.sign(dz||1)*(c.hd + r); player.vel.z = 0; }
     }
@@ -5223,9 +5284,9 @@ function resolveWalls(p){
 /* analytic ray vs the collider boxes — far cheaper than raycasting the meshes */
 function rayCity(orig, dir, maxT){
   let bestT = maxT, hit = null, hitN = null;
-  for(const c of cityColliders){
-    const dxc = c.x - orig.x, dzc = c.z - orig.z;
-    if(dxc*dxc + dzc*dzc > (maxT + 80)*(maxT + 80)) continue;
+  const cand = collidersAlong(orig, dir, maxT);
+  for(let ci=0; ci<cand.length; ci++){
+    const c = cand[ci];
     const bx0=c.x-c.hw, bx1=c.x+c.hw, bz0=c.z-c.hd, bz1=c.z+c.hd, by1=c.top;
     let t0 = 0, t1 = bestT, nAxis = 0, nSign = 1;
     for(const [o,d,lo,hi,axis] of [[orig.x,dir.x,bx0,bx1,0],[orig.y,dir.y,-2,by1,1],[orig.z,dir.z,bz0,bz1,2]]){
@@ -5268,8 +5329,19 @@ addEventListener('mousemove', e=>{
 });
 addEventListener('mousedown', e=>{
   if(ACT !== 'city' || MODE !== 'play' || document.pointerLockElement !== canvas) return;
-  if(e.button === 0) fireGrapple();
+  if(e.button === 0){ grapple.pressed = true; grapple.holdT = 0; fireGrapple(); }
   if(e.button === 2) releaseGrapple(true);
+});
+addEventListener('mouseup', e=>{
+  if(e.button !== 0 || !grapple.pressed) return;
+  grapple.pressed = false;
+  /* a tap zips you to the anchor - that is the building-to-building move.
+     holding reels you up the line instead. */
+  if(grapple.holdT < 0.24 && (grapple.state === 'latched' || grapple.state === 'firing')){
+    grapple.state = 'zip';
+  } else if(grapple.state === 'latched'){
+    releaseGrapple(true);
+  }
 });
 addEventListener('contextmenu', e=>{ if(ACT === 'city') e.preventDefault(); });
 
@@ -5302,6 +5374,7 @@ function releaseGrapple(launch){
 }
 function updateGrapple(dt){
   grapple.cooldown = Math.max(0, grapple.cooldown - dt);
+  if(grapple.pressed) grapple.holdT += dt;
   if(grapple.state === 'firing'){
     const step = PCFG.grappleTravel * dt;
     if(grapple.hookPos.distanceTo(grapple.anchor) <= step){
@@ -5313,11 +5386,34 @@ function updateGrapple(dt){
       grapple.hookPos.lerp(grapple.anchor, Math.min(1, step/grapple.hookPos.distanceTo(grapple.anchor)));
     }
   }
+  if(grapple.state === 'zip'){
+    ropeOrigin(_tmpA);
+    _gDir.subVectors(grapple.anchor, _tmpA);
+    const d = _gDir.length();
+    _gDir.normalize();
+    if(d < 6){                                   // arrived: keep the momentum
+      player.vel.copy(_gDir).multiplyScalar(Math.max(18, player.vel.length()*0.75));
+      player.vel.y = Math.max(player.vel.y, 6);
+      player.lift = PCFG.glideLiftTime;
+      releaseGrapple(false);
+    } else {
+      player.vel.copy(_gDir).multiplyScalar(PCFG.zipSpeed);
+      player.fallDist = 0;
+    }
+  }
+  if(grapple.state === 'latched' && grapple.pressed && grapple.holdT > 0.24){
+    // reeling: shorten the line and climb toward the anchor
+    grapple.length = Math.max(PCFG.ropeMin, grapple.length - PCFG.reelSpeed*dt);
+    ropeOrigin(_tmpA);
+    _gDir.subVectors(grapple.anchor, _tmpA).normalize();
+    player.vel.addScaledVector(_gDir, PCFG.reelPull*dt);
+    player.fallDist = 0;
+  }
   const active = grapple.state !== 'idle';
   _rope.visible = active; hook.visible = active;
   if(active){
     ropeOrigin(_tmpA);
-    const end = grapple.state === 'latched' ? grapple.anchor : grapple.hookPos;
+    const end = (grapple.state === 'latched' || grapple.state === 'zip') ? grapple.anchor : grapple.hookPos;
     const pa = _rope.geometry.attributes.position;
     pa.setXYZ(0, _tmpA.x, _tmpA.y, _tmpA.z);
     pa.setXYZ(1, end.x, end.y, end.z);
@@ -5398,6 +5494,7 @@ function updatePlayer(dt){
   if(hasInput) _wish.normalize();
   const sprinting = !!k.ShiftLeft;
   const swinging = grapple.state === 'latched';
+  const onLine = swinging || grapple.state === 'zip';
 
   // jump buffering and coyote time
   player.coyote = player.grounded ? PCFG.coyoteTime : Math.max(0, player.coyote - dt);
@@ -5473,21 +5570,42 @@ function updatePlayer(dt){
     }
   }
 
-  if(swinging) applySwing(dt, _wish);
+  if(swinging && !(grapple.pressed && grapple.holdT > 0.24)) applySwing(dt, _wish);
+
+  /* Damage is driven by how far you fell WITHOUT a cape or a line out, so a
+     glide or a grapple partway down cancels that part of the drop. */
+  if(!player.grounded && !player.gliding && !onLine && player.vel.y < -1)
+    player.fallDist = (player.fallDist||0) + (-player.vel.y)*dt;
+  if(player.gliding || onLine) player.fallDist = Math.min(player.fallDist||0, PCFG.safeFall);
+
+  // wall climb: hold Shift against a face
+  player.climbing = false;
+  if(k.ShiftLeft && player.touchWall && !player.grounded && !onLine && hasInput){
+    player.climbing = true;
+    player.vel.y = PCFG.climbSpeed;
+    player.vel.x *= 0.4; player.vel.z *= 0.4;
+    player.fallDist = 0;
+    player.gliding = false;
+  }
 
   // integrate, then resolve
+  player.touchWall = false;
   player.pos.addScaledVector(player.vel, dt);
   resolveWalls(player.pos);
   const gy = groundAt(player.pos.x, player.pos.z, player.pos.y);
   if(player.pos.y <= gy + 0.001 && player.vel.y <= 0){
     if(!player.grounded){
-      const drop = player.apexY - player.pos.y;
-      if(drop > PCFG.safeFall) player.health = Math.max(0, player.health - (drop-PCFG.safeFall)*PCFG.fallDamage);
-      cam.shake = Math.max(cam.shake, Math.min(0.35, drop*0.006));
+      const d = (player.fallDist||0);
+      if(d > PCFG.safeFall){
+        const dmg = (d - PCFG.safeFall) / (PCFG.killDrop - PCFG.safeFall) * PCFG.maxHealth;
+        player.health = Math.max(0, player.health - dmg);
+        player.hurtFlash = Math.min(1, dmg/40);
+      }
+      cam.shake = Math.max(cam.shake, Math.min(0.35, d*0.006));
     }
     player.pos.y = gy; player.vel.y = 0;
     player.grounded = true; player.gliding = false;
-    player.lift = PCFG.glideLiftTime; player.apexY = player.pos.y;
+    player.lift = PCFG.glideLiftTime; player.apexY = player.pos.y; player.fallDist = 0;
   } else {
     player.grounded = false;
     if(player.vel.y > 0) player.apexY = Math.max(player.apexY, player.pos.y);
