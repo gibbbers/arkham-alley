@@ -206,7 +206,7 @@
   <div class="row"><span>Zip across</span><span class="k">Tap left click</span></div>
   <div class="row"><span>Climb line</span><span class="k">Hold left click</span></div>
   <div class="row"><span>Let go</span><span class="k">Right click / Q</span></div>
-  <div class="row"><span>Enter / use</span><span class="k">E</span></div>
+  <div class="row"><span>Enter / break in</span><span class="k">E</span></div>
   <div class="sec"></div>
   <div class="row"><span>Combo &rarr; blade</span><span class="k">X</span></div>
   <div class="row"><span>Kick</span><span class="k">Z</span></div>
@@ -2949,6 +2949,33 @@ const AUDIO = (function(){
       src.connect(f); f.connect(ng); ng.connect(master); src.start(t); src.stop(t+0.16);
     },
 
+    /* breaking glass: a bright crack, then a scatter of falling shards */
+    glass(){
+      if(!ready || muted) return;
+      const t = ctx.currentTime;
+      // the initial crack — a hard noise burst through a high-pass
+      const src = ctx.createBufferSource(); src.buffer = el.noise;
+      const hp = ctx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=2200;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.42,t+0.004);
+      g.gain.exponentialRampToValueAtTime(0.02,t+0.13);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.62);
+      src.connect(hp); hp.connect(g); g.connect(master);
+      src.start(t); src.stop(t+0.7);
+      // then a dozen shards ringing and dying at random over half a second
+      for(let i=0;i<12;i++){
+        const st = t + 0.02 + Math.random()*0.42;
+        const o = ctx.createOscillator(), og = ctx.createGain();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(2400 + Math.random()*4200, st);
+        o.frequency.exponentialRampToValueAtTime(1100 + Math.random()*900, st+0.14);
+        og.gain.setValueAtTime(0.0001, st);
+        og.gain.exponentialRampToValueAtTime(0.030 + Math.random()*0.045, st+0.005);
+        og.gain.exponentialRampToValueAtTime(0.0001, st+0.16);
+        o.connect(og); og.connect(master); o.start(st); o.stop(st+0.20);
+      }
+    },
+
     /* the roll: a short breathy grunt, deliberately underplayed */
     grunt(){
       if(!ready || muted) return;
@@ -3365,7 +3392,11 @@ addEventListener('keydown', e=>{ flyKeys[e.code] = true;
   }
   if(e.code === 'KeyZ'){ startMove('kick'); }
   if(e.code === 'KeyE'){
-    if(player.lobby) exitDoor(); else if(nearDoor) enterDoor(); else releaseGrapple(true);
+    if(player.room)             exitRoom();
+    else if(nearWindow && !nearWindow.broken) breakIn();
+    else if(player.lobby)       exitDoor();
+    else if(nearDoor)           enterDoor();
+    else                        releaseGrapple(true);
   }
   if(e.code === 'KeyR'){ spawnPlayer(); }
   if(e.code === 'KeyH'){ document.getElementById('keys').classList.toggle('min'); }
@@ -3417,6 +3448,7 @@ function updateCity(dt, t){
     updatePlayerCamera(dt);
     updatePlayerRig(dt, t);
     updateBarks(dt);
+    updateWindows(dt);
     MAPUI.tick(dt);
     // wind rises with airspeed and closes the moment the cape folds
     const gl = player.gliding && !player.grounded;
@@ -3710,6 +3742,9 @@ const rigMat = new THREE.MeshStandardMaterial({ color:0x2a2d31, roughness:0.55, 
 let cityBeacons = [];
 const cityColliders = [];        // {x,z,hw,hd,top} — collision + grapple targets
 const cityDoors     = [];        // {x,y,z,w} — entrances, for the use-prompt later
+/* Sites with no public door are entered through glass. Each entry carries the
+   pane to hide, the interior it opens, and where you land inside. */
+const cityWindows   = [];        // {x,y,z,ry,w,h,mesh,interior,inside,name,broken}
 const cityRoofs     = [];        // {x,y,z} rooftop centres, for spawn/anchor picking
 const LANDMARKS = [ {c:10,r:10,h:300}, {c: 8,r:11,h:246}, {c:12,r: 9,h:262},
                     {c:11,r: 7,h:228}, {c: 7,r: 8,h:238}, {c:13,r:12,h:214},
@@ -4796,6 +4831,126 @@ const ORANGE = new THREE.MeshStandardMaterial({ color:0xc9600f, roughness:0.9, e
 const SCHOOLKID = [0x2c3f6b, 0x6b2c3f, 0x2f5a3a, 0x5a4a2f]
   .map(c=>new THREE.MeshStandardMaterial({ color:c, roughness:0.9, envMapIntensity:0.5 }));
 
+const GLASS_MAT = new THREE.MeshPhysicalMaterial({
+  color:0x9fc6d8, roughness:0.06, metalness:0.0, transmission:0.0,
+  opacity:0.34, transparent:true, envMapIntensity:2.2, clearcoat:1.0,
+  emissive:0x18303f, emissiveIntensity:0.5, side:THREE.DoubleSide });
+
+/* One shard pool for the whole city — a break re-uses whatever is idle rather
+   than allocating, so the twentieth window costs what the first one did. */
+const SHARDS = (function(){
+  const geo = new THREE.BoxGeometry(1, 1, 0.035);
+  const mat = GLASS_MAT.clone(); mat.opacity = 0.55;
+  const pool = [];
+  for(let i=0;i<54;i++){
+    const m = new THREE.Mesh(geo, mat);
+    m.visible = false; m.castShadow = false; cityScene.add(m);
+    pool.push({ mesh:m, live:false, t:0, vel:new THREE.Vector3(), spin:new THREE.Vector3() });
+  }
+  return {
+    burst(x, y, z, ry, w, h, awayX, awayZ){
+      let n = 0;
+      for(const p of pool){
+        if(p.live || n >= 22) continue;
+        n++;
+        p.live = true; p.t = 0;
+        const sx = rr(0.10, 0.30) * w, sy = rr(0.10, 0.30) * h;
+        p.mesh.scale.set(sx, sy, 1);
+        p.mesh.position.set(x + rr(-0.4,0.4)*w, y + rr(-0.45,0.45)*h, z + rr(-0.4,0.4)*w*Math.abs(Math.sin(ry)));
+        p.mesh.rotation.set(rand()*6.28, ry + rr(-0.5,0.5), rand()*6.28);
+        // thrown inward, following the punch, with a little lift and spread
+        p.vel.set(awayX*rr(2.4,6.5) + rr(-1.4,1.4), rr(0.6,3.4), awayZ*rr(2.4,6.5) + rr(-1.4,1.4));
+        p.spin.set(rr(-9,9), rr(-9,9), rr(-9,9));
+        p.mesh.visible = true;
+      }
+    },
+    tick(dt){
+      for(const p of pool){
+        if(!p.live) continue;
+        p.t += dt;
+        p.vel.y -= 22*dt;
+        p.mesh.position.addScaledVector(p.vel, dt);
+        p.mesh.rotation.x += p.spin.x*dt; p.mesh.rotation.y += p.spin.y*dt;
+        p.mesh.rotation.z += p.spin.z*dt;
+        const g = groundAt(p.mesh.position.x, p.mesh.position.z, p.mesh.position.y);
+        if(p.mesh.position.y <= g + 0.02){ p.mesh.position.y = g + 0.02; p.vel.set(0,0,0); }
+        if(p.t > 2.6){ p.live = false; p.mesh.visible = false; }
+      }
+    }
+  };
+})();
+
+/* ---- interiors: one palette so every room reads as the same city --------- */
+const INT = {
+  floor : new THREE.MeshStandardMaterial({ color:0x6f7378, roughness:0.72, metalness:0.05, envMapIntensity:0.5 }),
+  lino  : new THREE.MeshStandardMaterial({ color:0x8a8578, roughness:0.55, metalness:0.02, envMapIntensity:0.7 }),
+  wall  : new THREE.MeshStandardMaterial({ color:0xa8aca7, roughness:0.9,  metalness:0.0,  envMapIntensity:0.35 }),
+  wallB : new THREE.MeshStandardMaterial({ color:0x4d5b63, roughness:0.85, metalness:0.0,  envMapIntensity:0.4 }),
+  ceil  : new THREE.MeshStandardMaterial({ color:0x9ea29c, roughness:0.95, metalness:0.0,  envMapIntensity:0.3 }),
+  strip : new THREE.MeshStandardMaterial({ color:0x14161a, emissive:0xeaf2ff, emissiveIntensity:3.2, roughness:0.4 }),
+  desk  : new THREE.MeshStandardMaterial({ color:0x6b5334, roughness:0.62, metalness:0.05, envMapIntensity:0.6 }),
+  metal : new THREE.MeshStandardMaterial({ color:0x565c63, roughness:0.42, metalness:0.82, envMapIntensity:1.0 }),
+  chair : new THREE.MeshStandardMaterial({ color:0x2b3340, roughness:0.7,  metalness:0.1,  envMapIntensity:0.6 }),
+  board : new THREE.MeshStandardMaterial({ color:0x1d2b22, roughness:0.86, metalness:0.0,  envMapIntensity:0.35 }),
+  locker: new THREE.MeshStandardMaterial({ color:0x3c5a70, roughness:0.5,  metalness:0.45, envMapIntensity:0.9 }),
+  screen: new THREE.MeshStandardMaterial({ color:0x07131c, emissive:0x39b7e8, emissiveIntensity:2.4, roughness:0.35 }),
+  amber : new THREE.MeshStandardMaterial({ color:0x1a1206, emissive:0xffb347, emissiveIntensity:2.8, roughness:0.4 }),
+  paper : new THREE.MeshStandardMaterial({ color:0xd9d5c6, roughness:0.9,  metalness:0.0,  envMapIntensity:0.4 })
+};
+/* interiors are built once but kept dark until you are close enough to see in */
+const siteInteriors = [];    // {group, x, z, r}
+const schoolRooms  = [];    // second-floor plans, kept for the bomb mission
+function makeInterior(parent, cx, cz, r){
+  const IN = new THREE.Group(); IN.visible = false; parent.add(IN);
+  siteInteriors.push({ group:IN, x:cx, z:cz, r:r||60 });
+  return IN;
+}
+/* Rooms are authored as loose boxes because that is readable, then flattened
+   to one mesh per material before anyone sees them. A classroom floor goes
+   from ~290 draw calls to a handful; nothing in these rooms animates, so
+   there is nothing to lose by baking the transforms. */
+function compactGroup(root){
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const tmp = new THREE.Matrix4();
+  const byMat = new Map();
+  root.traverse(o=>{
+    if(!o.isMesh || !o.geometry) return;
+    const g = o.geometry.clone();
+    g.applyMatrix4(tmp.multiplyMatrices(inv, o.matrixWorld));
+    for(const k of Object.keys(g.attributes))
+      if(k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+    if(!byMat.has(o.material)) byMat.set(o.material, []);
+    byMat.get(o.material).push(g);
+  });
+  while(root.children.length) root.remove(root.children[0]);
+  for(const [mat, list] of byMat){
+    let merged = null;
+    try{ merged = mergeGeometries(list, false); }catch(e){ merged = null; }
+    if(merged){
+      const m = new THREE.Mesh(merged, mat);
+      m.castShadow = false; m.receiveShadow = true; root.add(m);
+      list.forEach(g=>g.dispose());
+    } else {
+      // incompatible attributes: keep them separate rather than lose the room
+      for(const g of list){ const m = new THREE.Mesh(g, mat);
+        m.castShadow = false; m.receiveShadow = true; root.add(m); }
+    }
+  }
+  return root;
+}
+
+/* a desk with a chair tucked under it, used by every room that has seating */
+function deskUnit(g, x, z, ry, w, d){
+  const t = sbox(g, INT.desk, w, 0.10, d, x, 0.78, z, ry, false);
+  for(const sx of [-1,1]) for(const sz of [-1,1])
+    scyl(g, INT.metal, 0.035,0.035, 0.74, 5, x+sx*(w*0.42), 0.37, z+sz*(d*0.38), false);
+  const cz2 = z + Math.cos(ry)*(d*0.5 + 0.42), cx2 = x + Math.sin(ry)*(d*0.5 + 0.42);
+  sbox(g, INT.chair, 0.46, 0.07, 0.46, cx2, 0.46, cz2, ry, false);
+  sbox(g, INT.chair, 0.46, 0.52, 0.06, cx2 + Math.sin(ry)*0.21, 0.74, cz2 + Math.cos(ry)*0.21, ry, false);
+  return t;
+}
+
 function sbox(g, mat, w,h,d, x,y,z, ry, shadow){
   const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
   m.position.set(x,y,z); if(ry) m.rotation.y=ry;
@@ -4878,6 +5033,7 @@ function buildSchool(cx, cz){
   sbox(g, SM.brickS, W, FL*N, D, 0, FL*N/2 + 0.3, -4);
   sbox(g, SM.conc, W+1.6, 0.9, D+1.6, 0, FL*N + 0.75, -4);
   for(let f=0; f<N; f++) for(let i=0;i<11;i++){
+    if(f === 1 && i === 2) continue;         // the break-in pane owns this slot
     const wx = -W/2 + 2.6 + i*3.5;
     const lit = rand() < 0.35;
     sbox(g, lit?SM.litWin:SM.darkWin, 1.9, 2.2, 0.2, wx, 1.9 + f*FL, -4 + D/2, 0, false);
@@ -4897,6 +5053,72 @@ function buildSchool(cx, cz){
   for(let i=0;i<11;i++)
     sitePeople.push({ x:cx+rr(-20,20)*SITE_S, z:cz+rr(4,14)*SITE_S, r:rr(1.5,5),
                       sp:rr(0.5,1.4), ph:rand()*6.28, mat:SCHOOLKID[(rand()*4)|0] });
+  /* ---- second floor: corridor along the window wall, classrooms behind ----
+     The break-in pane is one of the front windows, so the room you land in is
+     the corridor and every classroom opens off it. */
+  {
+    const IN = makeInterior(g, cx, cz, 70);
+    const FY = 0.3 + FL;                     // slab this storey sits on
+    const CH = 3.4;                          // clear height, ~5m at site scale
+    const X0 = -18, X1 = 18, ZB = -11, ZF = 3.6;
+    const CORZ = 2.2;                        // corridor centre line
+    const f = new THREE.Group(); f.position.y = FY; IN.add(f);
+
+    sbox(f, INT.lino, X1-X0, 0.18, ZF-ZB, (X0+X1)/2, 0.09, (ZB+ZF)/2, 0, false);
+    sbox(f, INT.ceil, X1-X0, 0.18, ZF-ZB, (X0+X1)/2, CH,   (ZB+ZF)/2, 0, false);
+    sbox(f, INT.wall, X1-X0, CH, 0.22, (X0+X1)/2, CH/2, ZB, 0, false);          // back
+    for(const sx of [X0, X1]) sbox(f, INT.wall, 0.22, CH, ZF-ZB, sx, CH/2, (ZB+ZF)/2, 0, false);
+    for(let i=0;i<9;i++) sbox(f, INT.strip, 2.4, 0.08, 0.4, X0+3+i*4.2, CH-0.12, CORZ, 0, false);
+
+    // lockers line the corridor's inner wall between classroom doors
+    for(let i=0;i<22;i++){
+      const lx = X0 + 1.4 + i*1.6;
+      if(Math.abs(lx+10.4) < 1.6) continue;                 // keep the landing clear
+      sbox(f, INT.locker, 1.4, 1.9, 0.42, lx, 1.05, 0.95, 0, false);
+      sbox(f, INT.metal,  0.06, 0.06, 0.06, lx+0.5, 1.15, 0.72, 0, false);
+    }
+
+    // three classrooms behind the corridor, split by partitions
+    const PART = [-6.5, 6.5];
+    for(const px of PART) sbox(f, INT.wall, 0.22, CH, 0.7-ZB, px, CH/2, (ZB+0.7)/2, 0, false);
+    const rooms = [[X0+0.5, -6.6], [-6.4, 6.4], [6.6, X1-0.5]];
+    for(let r=0; r<rooms.length; r++){
+      const [rx0, rx1] = rooms[r], mid = (rx0+rx1)/2;
+      // front wall of the classroom, with a doorway punched through it
+      const dW = 1.5, dx = mid;
+      sbox(f, INT.wall, (dx-dW/2)-rx0, CH, 0.22, (rx0+dx-dW/2)/2, CH/2, 0.7, 0, false);
+      sbox(f, INT.wall, rx1-(dx+dW/2), CH, 0.22, (dx+dW/2+rx1)/2, CH/2, 0.7, 0, false);
+      sbox(f, INT.wall, dW, CH-2.3, 0.22, dx, CH-0.55, 0.7, 0, false);        // lintel
+      // blackboard on the back wall, teacher's desk under it, rows of desks
+      sbox(f, INT.board, (rx1-rx0)*0.55, 1.5, 0.08, mid, 1.85, ZB+0.2, 0, false);
+      deskUnit(f, mid, ZB+1.9, Math.PI, 2.0, 0.8);
+      for(let row=0; row<3; row++) for(let col=0; col<3; col++){
+        const dxp = mid - 2.6 + col*2.6, dzp = ZB + 3.9 + row*2.1;
+        if(dxp < rx0+0.7 || dxp > rx1-0.7) continue;
+        deskUnit(f, dxp, dzp, 0, 1.5, 0.7);
+      }
+      for(let i=0;i<3;i++) sbox(f, INT.strip, 2.0, 0.08, 0.36, mid, CH-0.12, ZB+2.4+i*2.6, 0, false);
+      // one person per classroom so it is never an empty box
+      const who = new THREE.Mesh(GEO_PED, SCHOOLKID[r % SCHOOLKID.length]);
+      who.position.set(mid + rr(-1.5,1.5), 0.52, ZB + 2.6); f.add(who);
+    }
+
+    /* the pane you come through: one front window, framed and struck */
+    const WX = -10.4, WY = 1.9 + FL, WZ = -4 + D/2;
+    const pane = sbox(g, GLASS_MAT, 2.4, 2.4, 0.10, WX, WY, WZ + 0.12, 0, false);
+    sbox(g, SM.conc, 2.8, 0.22, 0.34, WX, WY + 1.3, WZ + 0.16, 0, false);
+    sbox(g, SM.conc, 2.8, 0.22, 0.34, WX, WY - 1.3, WZ + 0.16, 0, false);
+    for(const sx of [-1,1]) sbox(g, SM.conc, 0.22, 2.6, 0.34, WX + sx*1.3, WY, WZ + 0.16, 0, false);
+    addWindow(g, pane, {
+      name:'SCHOOL', w:2.4, h:2.4, interior:IN,
+      inside:{ x:cx + WX*SITE_S, y:FY*SITE_S + 0.18*SITE_S, z:cz + CORZ*SITE_S },
+      room:{ x0:cx + (X0+0.8)*SITE_S, x1:cx + (X1-0.8)*SITE_S,
+             z0:cz + (ZB+0.8)*SITE_S, z1:cz + (ZF-0.6)*SITE_S,
+             y:(FY + 0.18)*SITE_S, ceil:(FY + CH - 0.4)*SITE_S }
+    });
+    schoolRooms.push({ g:f, cx, cz, FY, CORZ, X0, X1, ZB, mid:rooms[1], interior:IN });
+    compactGroup(IN);
+  }
   siteGroups.push({group:g, x:cx, z:cz, near:200, name:'SCHOOL'});
   return g;
 }
@@ -4984,6 +5206,69 @@ function buildPrison(cx, cz){
   for(let i=0;i<18;i++)
     sitePeople.push({ x:cx+rr(-18,18)*PRISON_S, z:cz+rr(6,20)*PRISON_S, r:rr(2,6),
                       sp:rr(0.4,1.1), ph:rand()*6.28, mat:ORANGE });
+  /* ---- the very top: warden's control room behind one big window --------
+     The only way in is through that glass, which is why it faces the roofline
+     you would grapple to rather than the yard. */
+  {
+    const ROOF = CFL*CN + 0.7;               // top of the cellblock slab
+    const RW = 17, RD = 10, RH = 3.6, RZ = -3;
+    const IN = makeInterior(g, cx, cz, 90);
+
+    // shell, sitting on the cellblock roof
+    sbox(g, SM.conc, RW + 1.6, 0.5, RD + 1.6, 0, ROOF + 0.25, RZ, 0, false);
+    sbox(g, SM.conc, RW, RH, 0.5, 0, ROOF + RH/2 + 0.5, RZ - RD/2, 0, false);   // back
+    for(const sx of [-1,1])
+      sbox(g, SM.conc, 0.5, RH, RD, sx*RW/2, ROOF + RH/2 + 0.5, RZ, 0, false);
+    sbox(g, SM.conc, RW + 2.2, 0.7, RD + 2.2, 0, ROOF + RH + 0.85, RZ, 0, false); // cap
+    // the front is glass, mullioned, with a low spandrel under it
+    sbox(g, SM.conc, RW, 0.45, 0.5, 0, ROOF + 0.90, RZ + RD/2, 0, false);
+    for(const mx of [-RW/4, 0, RW/4])
+      sbox(g, SM.conc, 0.30, 2.67, 0.42, mx, ROOF + 2.47, RZ + RD/2, 0, false);
+    // sill just above the interior floor, so this is a step through, not a climb
+    const bigPane = sbox(g, GLASS_MAT, RW - 0.9, 2.67, 0.12,
+                         0, ROOF + 2.47, RZ + RD/2 + 0.06, 0, false);
+    // a beacon on the roof so it reads as the way in from a long way off
+    scyl(g, SM.conc, 0.16,0.20, 1.6, 8, RW/2 - 1.2, ROOF + RH + 2.0, RZ - RD/2 + 1.2, false);
+    { const b = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), SM.copRed);
+      b.position.set(RW/2 - 1.2, ROOF + RH + 2.9, RZ - RD/2 + 1.2); g.add(b); }
+
+    // interior: console bank facing the glass, monitor wall, a desk and a guard
+    const f = new THREE.Group(); f.position.y = ROOF + 0.5; IN.add(f);
+    const X0 = -RW/2 + 0.6, X1 = RW/2 - 0.6, ZB = RZ - RD/2 + 0.6, ZF = RZ + RD/2 - 0.5;
+    sbox(f, INT.floor, X1-X0, 0.18, ZF-ZB, 0, 0.09, RZ, 0, false);
+    sbox(f, INT.ceil,  X1-X0, 0.18, ZF-ZB, 0, RH - 0.35, RZ, 0, false);
+    for(let i=0;i<4;i++) sbox(f, INT.strip, 2.8, 0.08, 0.4, -6.0 + i*4.0, RH - 0.48, RZ, 0, false);
+
+    // the console: a long angled desk under the window, screens along it
+    sbox(f, INT.metal, RW - 3.0, 0.95, 1.15, 0, 0.55, ZF - 1.2, 0, false);
+    sbox(f, INT.desk,  RW - 2.6, 0.10, 1.35, 0, 1.06, ZF - 1.2, 0, false);
+    for(let i=0;i<6;i++){
+      const mx = -6.2 + i*2.5;
+      sbox(f, INT.screen, 1.05, 0.62, 0.07, mx, 1.48, ZF - 1.65, 0, false);
+      sbox(f, INT.metal,  0.24, 0.14, 0.18, mx, 1.13, ZF - 1.60, 0, false);
+    }
+    // monitor wall on the back partition — the cameras, one amber alarm
+    sbox(f, INT.wallB, RW - 2.0, RH - 0.9, 0.16, 0, (RH-0.9)/2, ZB + 0.2, 0, false);
+    for(let r2=0; r2<2; r2++) for(let c2=0; c2<5; c2++)
+      sbox(f, INT.screen, 1.15, 0.72, 0.06, -5.0 + c2*2.5, 1.15 + r2*0.95, ZB + 0.32, 0, false);
+    sbox(f, INT.amber, 0.34, 0.34, 0.20, RW/2 - 2.2, 2.3, ZB + 0.32, 0, false);
+    // key cabinet, a swivel chair, and the guard on shift
+    sbox(f, INT.locker, 1.3, 1.7, 0.4, X0 + 1.0, 0.95, ZB + 1.6, 0, false);
+    sbox(f, INT.chair, 0.5, 0.08, 0.5, -1.2, 0.5, ZF - 2.6, 0, false);
+    scyl(f, INT.metal, 0.06,0.06, 0.44, 6, -1.2, 0.26, ZF - 2.6, false);
+    sbox(f, INT.chair, 0.5, 0.6, 0.08, -1.2, 0.84, ZF - 2.35, 0, false);
+    { const guard = new THREE.Mesh(GEO_PED, coatMats[0]);
+      guard.position.set(1.8, 0.52, ZF - 2.7); guard.rotation.y = Math.PI; f.add(guard); }
+
+    addWindow(g, bigPane, {
+      name:'PENITENTIARY', w:RW - 0.9, h:2.67, interior:IN,
+      inside:{ x:cx, y:(ROOF + 0.5 + 0.18)*PRISON_S, z:cz + (ZF - 2.0)*PRISON_S },
+      room:{ x0:cx + (X0 + 0.7)*PRISON_S, x1:cx + (X1 - 0.7)*PRISON_S,
+             z0:cz + (ZB + 0.9)*PRISON_S, z1:cz + (ZF - 0.7)*PRISON_S,
+             y:(ROOF + 0.5 + 0.18)*PRISON_S, ceil:(ROOF + RH + 0.1)*PRISON_S }
+    });
+    compactGroup(IN);
+  }
   siteGroups.push({group:g, x:cx, z:cz, near:330, name:'PENITENTIARY'});
   return g;
 }
@@ -5057,6 +5342,74 @@ function buildPolice(cx, cz){
   for(let i=0;i<5;i++)
     sitePeople.push({x:cx+rr(-16,16)*SITE_S, z:cz+rr(6,14)*SITE_S, r:rr(1,3.5),
                      sp:rr(0.4,1.1), ph:rand()*6.28, mat:coatMats[(rand()*coatMats.length)|0]});
+  /* ---- top floor: bullpen, captain's office and a holding cell ---------- */
+  {
+    const IN = makeInterior(g, cx, cz, 70);
+    const FY = 0.3 + FL*2, CH = 3.3;
+    const X0 = -14.5, X1 = 14.5, ZB = -9.6, ZF = 3.9;
+    const f = new THREE.Group(); f.position.y = FY; IN.add(f);
+
+    sbox(f, INT.floor, X1-X0, 0.18, ZF-ZB, (X0+X1)/2, 0.09, (ZB+ZF)/2, 0, false);
+    sbox(f, INT.ceil,  X1-X0, 0.18, ZF-ZB, (X0+X1)/2, CH,   (ZB+ZF)/2, 0, false);
+    sbox(f, INT.wallB, X1-X0, CH, 0.22, (X0+X1)/2, CH/2, ZB, 0, false);
+    for(const sx of [X0, X1]) sbox(f, INT.wallB, 0.22, CH, ZF-ZB, sx, CH/2, (ZB+ZF)/2, 0, false);
+    for(let i=0;i<7;i++) sbox(f, INT.strip, 2.6, 0.08, 0.4, X0+3.4+i*3.9, CH-0.12, -2.4, 0, false);
+
+    // bullpen: desks in facing pairs down the middle, detectives at some of them
+    for(let c=0; c<4; c++) for(const sz of [-1, 1]){
+      const dx = -9.4 + c*5.4, dz = -3.4 + sz*1.0;
+      deskUnit(f, dx, dz, sz > 0 ? 0 : Math.PI, 2.1, 0.9);
+      sbox(f, INT.screen, 0.72, 0.5, 0.06, dx - 0.5, 1.12, dz, 0, false);   // monitor
+      sbox(f, INT.metal,  0.20, 0.06, 0.16, dx - 0.5, 0.86, dz, 0, false);
+      sbox(f, INT.paper,  0.5, 0.04, 0.36, dx + 0.6, 0.85, dz, 0, false);
+      if(rand() < 0.55){
+        const cop = new THREE.Mesh(GEO_PED, coatMats[(rand()*coatMats.length)|0]);
+        cop.position.set(dx + rr(-0.5,0.5), 0.52, dz + (sz>0 ? 1.5 : -1.5));
+        cop.rotation.y = sz > 0 ? Math.PI : 0; f.add(cop);
+      }
+    }
+    // evidence wall: boards, pinned paper, a case map
+    sbox(f, INT.board, 7.0, 2.0, 0.10, -6.0, 1.9, ZB + 0.22, 0, false);
+    for(let i=0;i<14;i++)
+      sbox(f, INT.paper, rr(0.4,0.7), rr(0.3,0.5), 0.02,
+           -6.0 + rr(-3.0,3.0), 1.9 + rr(-0.7,0.7), ZB + 0.30, 0, false);
+
+    // captain's office, glazed, in the far corner
+    const OX0 = 6.2, OZ1 = -2.6;
+    sbox(f, INT.wallB, X1-OX0, CH, 0.20, (OX0+X1)/2, CH/2, OZ1, 0, false);
+    sbox(f, GLASS_MAT, X1-OX0-2.0, 1.7, 0.06, (OX0+X1)/2 + 0.6, 1.85, OZ1, 0, false);
+    sbox(f, INT.wallB, 0.20, CH, OZ1-ZB, OX0, CH/2, (ZB+OZ1)/2, 0, false);
+    deskUnit(f, 10.4, ZB + 3.0, 0, 2.6, 1.1);
+    sbox(f, INT.screen, 0.8, 0.55, 0.06, 9.7, 1.15, ZB + 3.0, 0, false);
+    sbox(f, INT.amber, 0.3, 0.34, 0.3, 11.4, 1.0, ZB + 3.0, 0, false);       // desk lamp
+    { const cap = new THREE.Mesh(GEO_PED, coatMats[0]);
+      cap.position.set(10.4, 0.52, ZB + 1.6); f.add(cap); }
+
+    // holding cell, barred, opposite corner
+    const HX1 = -8.4;
+    sbox(f, INT.wallB, 0.20, CH, 3.6, HX1, CH/2, ZB + 1.9, 0, false);
+    for(let b=0;b<9;b++)
+      scyl(f, SM.bar, 0.05,0.05, CH-0.4, 5, X0 + 0.8 + b*0.78, CH/2 - 0.1, ZB + 3.7, false);
+    sbox(f, SM.bar, 6.6, 0.12, 0.12, X0 + 3.9, CH - 0.3, ZB + 3.7, 0, false);
+    sbox(f, INT.metal, 2.2, 0.14, 0.7, X0 + 2.4, 0.75, ZB + 1.2, 0, false);   // bench
+    { const held = new THREE.Mesh(GEO_PED, ORANGE);
+      held.position.set(X0 + 2.4, 0.52, ZB + 2.2); f.add(held); }
+
+    /* the pane: a top-floor window on the front elevation */
+    const WX = 4.4, WY = 1.9 + FL*2, WZ = -3 + D/2;
+    const pane = sbox(g, GLASS_MAT, 2.6, 2.4, 0.10, WX, WY, WZ + 0.12, 0, false);
+    sbox(g, SM.conc, 3.0, 0.22, 0.34, WX, WY + 1.3, WZ + 0.16, 0, false);
+    sbox(g, SM.conc, 3.0, 0.22, 0.34, WX, WY - 1.3, WZ + 0.16, 0, false);
+    for(const sx of [-1,1]) sbox(g, SM.conc, 0.22, 2.6, 0.34, WX + sx*1.4, WY, WZ + 0.16, 0, false);
+    addWindow(g, pane, {
+      name:'GCPD', w:2.6, h:2.4, interior:IN,
+      inside:{ x:cx + WX*SITE_S, y:FY*SITE_S + 0.18*SITE_S, z:cz + 2.2*SITE_S },
+      room:{ x0:cx + (X0+0.8)*SITE_S, x1:cx + (X1-0.8)*SITE_S,
+             z0:cz + (ZB+0.8)*SITE_S, z1:cz + (ZF-0.6)*SITE_S,
+             y:(FY + 0.18)*SITE_S, ceil:(FY + CH - 0.4)*SITE_S }
+    });
+    compactGroup(IN);
+  }
   siteGroups.push({group:g, x:cx, z:cz, near:210, name:'GCPD'});
 }
 
@@ -5942,10 +6295,22 @@ function updatePlayerCamera(dt){
     const cp = Math.cos(cam.pitch);
     _gDir.set(-Math.sin(cam.yaw)*cp, -Math.sin(cam.pitch), -Math.cos(cam.yaw)*cp);
     let dist = cam.dist + (player.gliding ? 1.8 : 0);
+    /* Indoors the camera has to be pulled in and boxed: interior geometry is
+       not in the collision grid, so the wall ray below sails straight through
+       it and would otherwise park the lens inside a classroom wall. */
+    const R = player.room;
+    if(R) dist = Math.min(dist, 4.6);
     const back = rayCity(eye, _gDir, dist + 0.6);   // don't clip into walls
     if(back) dist = Math.max(1.4, back.t - 0.5);
     cityCam.position.copy(eye).addScaledVector(_gDir, dist);
-    cityCam.position.y = Math.max(cityCam.position.y, groundAt(cityCam.position.x, cityCam.position.z, cityCam.position.y) + 0.5);
+    if(R){
+      cityCam.position.x = clamp(cityCam.position.x, R.x0 + 0.5, R.x1 - 0.5);
+      cityCam.position.z = clamp(cityCam.position.z, R.z0 + 0.5, R.z1 - 0.5);
+      if(R.y != null)    cityCam.position.y = Math.max(cityCam.position.y, R.y + 0.45);
+      if(R.ceil != null) cityCam.position.y = Math.min(cityCam.position.y, R.ceil - 0.25);
+    } else {
+      cityCam.position.y = Math.max(cityCam.position.y, groundAt(cityCam.position.x, cityCam.position.z, cityCam.position.y) + 0.5);
+    }
   }
   if(cam.shake > 0){
     const t = performance.now()*0.001;
@@ -6017,6 +6382,32 @@ function exitDoor(){
   cam.shake = 0.05;
 }
 function updateDoors(){
+  // broke in: the room holds you, and E puts you back out through the hole
+  if(player.room){
+    const R = player.room, p = player.pos;
+    p.x = clamp(p.x, R.x0, R.x1);
+    if(p.z < R.z0){ p.z = R.z0; player.vel.z = 0; }
+    if(p.z > R.z1){ p.z = R.z1; player.vel.z = 0; }
+    // interiors are not in the collision grid, so the room owns its own floor
+    if(R.y != null){
+      if(p.y <= R.y + 0.001 && player.vel.y <= 0){
+        p.y = R.y; player.vel.y = 0;
+        player.grounded = true; player.gliding = false;
+        player.fallDist = 0; player.apexY = R.y;
+      }
+      if(R.ceil != null && p.y > R.ceil){ p.y = R.ceil; if(player.vel.y > 0) player.vel.y = 0; }
+    }
+    useEl.innerHTML = '<span class="k">E</span> Climb out';
+    useEl.classList.add('on');
+    nearDoor = null;
+    return;
+  }
+  if(nearWindow && !nearWindow.broken){
+    useEl.innerHTML = '<span class="k">E</span> Break in';
+    useEl.classList.add('on');
+    nearDoor = null;
+    return;
+  }
   // inside: you are held by the lobby walls and leave through the door
   if(player.lobby){
     const L = player.lobby, p = player.pos;
@@ -6103,6 +6494,7 @@ function spawnPlayer(){
   player.pos.set(s.x, Math.abs(gy - s.y) < 3 ? gy : s.y, s.z);
   player.vel.set(0,0,0); player.grounded = true; player.apexY = player.pos.y;
   player.fallDist = 0; player.gliding = false; player.health = PCFG.maxHealth;
+  player.room = null; player.roomWin = null; player.lobby = null;
   cam.yaw = Math.atan2(-s.x, -s.z);
 }
 
@@ -6136,6 +6528,13 @@ const CB = {
   rake  : pose({hipY:-0.02, hipYaw:-0.52, torY:-0.74, torX:-0.08, hdX:-0.14, fwd:0.34,
                 rShX:-1.72, rShZ:0.62, rElX:-0.16, lShX:-0.48, lShZ:0.58, lElX:-2.15,
                 rHpX:0.46, rKnX:0.10, lHpX:-0.24, lKnX:0.52}),
+  // break-in: a cocked cross driven through the pane, shoulder behind it
+  glassW: pose({hipY:-0.16, hipYaw:0.40, torY:0.54, torX:0.18, hdX:-0.10,
+                rShX:0.10, rShZ:-0.60, rElX:-2.05, lShX:-0.70, lShZ:0.42, lElX:-1.90,
+                rHpX:-0.36, rKnX:0.58, lHpX:0.32, lKnX:0.48}),
+  glassP: pose({hipY:-0.02, hipYaw:-0.44, torY:-0.66, torX:-0.06, hdX:-0.18, fwd:0.52,
+                rShX:-1.66, rShZ:-0.10, rElX:-0.04, lShX:-0.44, lShZ:0.50, lElX:-2.10,
+                rHpX:0.50, rKnX:0.08, lHpX:-0.26, lKnX:0.54}),
   throw : pose({hipY:-0.05, hipYaw:-0.34, torY:-0.55, torX:0.10, fwd:0.10,
                 rShX:-1.30, rShZ:-0.72, rElX:-0.30, lShX:-0.62, lShZ:0.40, lElX:-1.85,
                 rHpX:0.28, rKnX:0.18, lHpX:-0.14, lKnX:0.40})
@@ -6152,6 +6551,9 @@ const MOVES = {
                                        {t:0.62,p:CB.recov}] },
   roll:    { dur:0.66, hit:-1,   keys:[{t:0,p:CB.recov},{t:0.16,p:CB.roll,snap:true},
                                        {t:0.44,p:CB.roll},{t:0.66,p:CB.recov}] },
+  breakin: { dur:0.92, hit:0.34, keys:[{t:0,p:CB.recov},{t:0.20,p:CB.glassW},
+                                       {t:0.34,p:CB.glassP,snap:true},{t:0.52,p:CB.glassP},
+                                       {t:0.92,p:CB.recov}] },
   batstrike:{dur:0.60, hit:0.28, keys:[{t:0,p:CB.recov},{t:0.14,p:CB.slash},
                                        {t:0.30,p:CB.rake,snap:true},{t:0.42,p:CB.rake},
                                        {t:0.60,p:CB.recov}] },
@@ -6159,7 +6561,7 @@ const MOVES = {
                                        {t:0.24,p:CB.throw,snap:true},{t:0.36,p:CB.throw},
                                        {t:0.52,p:CB.recov}] }
 };
-const combat = { move:null, t:0, hitDone:false, chain:0, chainT:0 };
+const combat = { move:null, t:0, hitDone:false, chain:0, chainT:0, window:null };
 function startMove(name){
   if(combat.move && combat.t < MOVES[combat.move].dur * 0.62) return;   // let it land first
   combat.move = name; combat.t = 0; combat.hitDone = false;
@@ -6249,15 +6651,106 @@ function updateCombat(dt, t){
     cam.shake = Math.max(cam.shake, combat.move === 'uppercut' ? 0.17 : 0.11);
     FX.punch = Math.max(FX.punch, combat.move === 'uppercut' ? 0.5 : 0.32);
     // punch and kick share one body-blow; the uppercut just hits harder
-    if(combat.move !== 'batarang')
+    if(combat.move === 'breakin'){
+      if(combat.window) shatterWindow(combat.window);
+    } else if(combat.move !== 'batarang'){
       AUDIO.impact(combat.move === 'uppercut' || combat.move === 'kick');
+    }
   }
-  if(combat.t >= M.dur){ combat.move = null; return false; }
+  if(combat.t >= M.dur){
+    if(combat.move === 'breakin' && combat.window){
+      enterWindow(combat.window); combat.window = null;
+    }
+    combat.move = null; return false;
+  }
   const a = trackAt(M.keys, combat.t);
   applyPose(batman, a, 1);
   const yaw = player.facing, f = a[PKI.fwd];
   if(f){ batman.root.position.x += Math.sin(yaw)*f; batman.root.position.z += Math.cos(yaw)*f; }
   return true;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   22. BREAK-IN — breakable glass, shards, and the rooms behind it
+   ══════════════════════════════════════════════════════════════════════════ */
+/* Register a pane on a site group. Local coords are converted once, here, so
+   every caller can stay in the units its own building was authored in. */
+function addWindow(group, mesh, opt){
+  const S = group.scale.x;
+  const wx = group.position.x + mesh.position.x*S;
+  const wy = group.position.y + mesh.position.y*S;
+  const wz = group.position.z + mesh.position.z*S;
+  const w = { x:wx, y:wy, z:wz, ry:opt.ry||0, w:(opt.w||2)*S, h:(opt.h||2)*S,
+              mesh, broken:false, name:opt.name || 'INTERIOR',
+              interior:opt.interior || null,
+              // where you end up standing, and the box that holds you there
+              inside:opt.inside, room:opt.room, sill:opt.sill||0 };
+  cityWindows.push(w);
+  return w;
+}
+
+let nearWindow = null;
+const _wV = new THREE.Vector3();
+function updateWindows(dt){
+  SHARDS.tick(dt);
+  /* Interiors are dark until you are close. The gate is generous compared to
+     the 5m you asked for, because you must be able to see in through the hole
+     you just made rather than have the room appear after you climb through. */
+  for(const s of siteInteriors){
+    const d = Math.hypot(player.pos.x - s.x, player.pos.z - s.z);
+    const want = d < s.r || (player.room && player.roomWin && player.roomWin.interior === s.group);
+    if(s.group.visible !== want) s.group.visible = want;
+  }
+  nearWindow = null;
+  if(player.room || player.lobby) return;
+  let best = 5.5*5.5;                       // reach, not a room away
+  for(const w of cityWindows){
+    if(w.broken) continue;
+    const dx = w.x-player.pos.x, dz = w.z-player.pos.z, dy = w.y-(player.pos.y + PCFG.height*0.5);
+    if(Math.abs(dy) > 3.2) continue;
+    const dd = dx*dx + dz*dz;
+    if(dd < best){ best = dd; nearWindow = w; }
+  }
+}
+
+/* the punch itself: glass goes on the hit frame, you go through on the recover */
+function breakIn(){
+  const w = nearWindow;
+  if(!w || w.broken) return;
+  startMove('breakin');
+  combat.window = w;
+}
+function shatterWindow(w){
+  if(w.broken) return;
+  w.broken = true;
+  if(w.mesh) w.mesh.visible = false;
+  const ax = Math.sin(w.ry ? w.ry : Math.atan2(w.x-player.pos.x, w.z-player.pos.z));
+  const dx = w.x - player.pos.x, dz = w.z - player.pos.z;
+  const L = Math.hypot(dx,dz) || 1;
+  SHARDS.burst(w.x, w.y, w.z, w.ry, w.w, w.h, dx/L, dz/L);
+  AUDIO.glass();
+  cam.shake = Math.max(cam.shake, 0.26);
+  if(w.interior) w.interior.visible = true;
+}
+function enterWindow(w){
+  if(!w || !w.inside) return;
+  player.pos.set(w.inside.x, w.inside.y, w.inside.z);
+  player.vel.set(0,0,0); player.grounded = true;
+  player.room = w.room || null; player.roomWin = w;
+  player.fallDist = 0; player.gliding = false;
+  if(w.interior) w.interior.visible = true;
+  cam.shake = Math.max(cam.shake, 0.10);
+}
+function exitRoom(){
+  const w = player.roomWin;
+  player.room = null; player.roomWin = null;
+  if(!w) return;
+  // step back out through the hole you made
+  const dx = w.x - (w.inside ? w.inside.x : w.x), dz = w.z - (w.inside ? w.inside.z : w.z);
+  const L = Math.hypot(dx,dz) || 1;
+  player.pos.set(w.x + (dx/L)*1.6, w.y - w.h*0.35, w.z + (dz/L)*1.6);
+  player.vel.set(0,0,0); player.grounded = false;
+  player.apexY = player.pos.y; player.fallDist = 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -6377,6 +6870,8 @@ window.GOTHAM = {
   groundAt:(x,z,y)=>groundAt(x,z,y), near:(x,z)=>collidersNear(x,z),
   BARK, combat, audioSfx:AUDIO,
   MAPUI,
+  windows:()=>cityWindows, interiors:()=>siteInteriors,
+  breakIn:()=>breakIn(), get nearWindow(){ return nearWindow; },
   view(p, look){ cityCam.position.set(p[0],p[1],p[2]);
     if(look){ const d=new THREE.Vector3(look[0]-p[0],look[1]-p[1],look[2]-p[2]).normalize();
       fly.yaw = Math.atan2(d.x, d.z); fly.pitch = Math.asin(clamp(d.y,-1,1)); }
