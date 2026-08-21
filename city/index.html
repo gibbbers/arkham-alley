@@ -34,6 +34,21 @@
   #loader .b i { display:block; height:100%; width:30%; background:#8fa6c8;
                  animation:sweep 1.1s ease-in-out infinite; }
   @keyframes sweep { 0%{transform:translateX(-100%)} 100%{transform:translateX(340%)} }
+  /* ---- control legend, top-left, collapsible ---- */
+  #keys { position:fixed; z-index:26; left:14px; top:calc(7vh + 12px); width:216px;
+          background:linear-gradient(180deg,rgba(8,10,15,.82),rgba(6,7,11,.9));
+          border:1px solid rgba(150,175,215,.16); border-left:2px solid #7f93b8;
+          border-radius:3px; padding:9px 12px 10px; backdrop-filter:blur(7px);
+          font-size:10.5px; color:#c3cede; letter-spacing:.04em; user-select:none; }
+  #keys h4 { margin:0 0 7px; font-size:9px; letter-spacing:.3em; text-transform:uppercase;
+             color:#7f93b8; font-weight:700; display:flex; justify-content:space-between;
+             cursor:pointer; }
+  #keys .row { display:flex; justify-content:space-between; padding:1.5px 0; }
+  #keys .k { color:#e7ecf5; font-weight:600; }
+  #keys.min .row, #keys.min .sec { display:none; }
+  #keys.min { width:auto; }
+  #keys .sec { margin-top:6px; padding-top:5px; border-top:1px solid rgba(150,175,215,.12); }
+
   #err { position:fixed; inset:0; z-index:50; display:none; padding:40px; color:#e88; font:12px/1.6 monospace;
          background:#000; white-space:pre-wrap; overflow:auto; }
 
@@ -78,6 +93,24 @@
 <div id="fade"></div>
 <div id="title">Alley<small>three.js — procedural cinematic test</small></div>
 <div id="stats"></div>
+<div id="keys">
+  <h4><span>Controls</span><span id="keysToggle">[H]</span></h4>
+  <div class="row"><span>Move</span><span class="k">W A S D</span></div>
+  <div class="row"><span>Sprint</span><span class="k">Shift</span></div>
+  <div class="row"><span>Jump</span><span class="k">Space</span></div>
+  <div class="row"><span>Glide</span><span class="k">Hold Space</span></div>
+  <div class="row"><span>Dive</span><span class="k">S while gliding</span></div>
+  <div class="row"><span>Pull up</span><span class="k">release S</span></div>
+  <div class="sec"></div>
+  <div class="row"><span>Grapple</span><span class="k">Left click</span></div>
+  <div class="row"><span>Release</span><span class="k">Right click / E</span></div>
+  <div class="row"><span>Reel in / out</span><span class="k">Shift / Ctrl</span></div>
+  <div class="sec"></div>
+  <div class="row"><span>View</span><span class="k">V</span></div>
+  <div class="row"><span>Free cam</span><span class="k">F</span></div>
+  <div class="row"><span>Respawn</span><span class="k">R</span></div>
+  <div class="row"><span>Cutscene</span><span class="k">G</span></div>
+</div>
 <div id="cap"><div class="box"><div class="who"></div><div class="txt"></div></div></div>
 <div id="snd"><input id="vol" type="range" min="0" max="100" value="75" /><button id="mute" title="mute">&#9834;</button></div>
 <div id="start"><div class="r">&#9654;</div><div class="t">Alley</div><div class="s">click to begin &middot; with sound</div></div>
@@ -2349,6 +2382,9 @@ const clock  = new THREE.Clock();
 const fadeEl = document.getElementById('fade');
 const titleEl= document.getElementById('title');
 const statsEl= document.getElementById('stats');
+const keysEl = document.getElementById('keys');
+keysEl.style.display = 'none';
+keysEl.querySelector('h4').addEventListener('click', ()=>keysEl.classList.toggle('min'));
 let elapsed = 0, frames = 0, fpsAcc = 0, fpsT = 0, degraded = 0;
 const neonBase = {a:neonA.intensity};
 const lampBase = lamp.intensity, fireBase = fireLight.intensity;
@@ -2371,6 +2407,7 @@ function frame(dtReal){
     AUDIO.duckTo(1.0);
     AUDIO.tick(dtReal);
     setCaption('');
+    keysEl.style.display = '';
     fadeEl.style.opacity = '0';              // the CSS blackout starts opaque
     titleEl.style.opacity = '0';
     grade.uniforms.uTime.value  = elapsed;
@@ -2492,6 +2529,7 @@ function frame(dtReal){
   if(t < 1.25)            fade = 1 - easeOut(t/1.25);
   else if(t > LOOP-1.6)   fade = easeOut((t-(LOOP-1.6))/1.6);
   updateAudio(t, dtReal);
+  keysEl.style.display = 'none';
   grade.uniforms.uFade.value  = fade;
   grade.uniforms.uTime.value  = elapsed;
   grade.uniforms.uPunch.value = FX.punch;
@@ -3059,6 +3097,13 @@ const fly = { yaw: Math.PI, pitch: -0.22, speed: 12, on: false };
 const flyKeys = Object.create(null);
 addEventListener('keydown', e=>{ flyKeys[e.code] = true;
   if(e.code === 'KeyG'){ setAct(ACT === 'city' ? 'cutscene' : 'city'); }
+  if(ACT !== 'city') return;
+  if(e.code === 'KeyF'){ MODE = MODE === 'play' ? 'fly' : 'play';
+    if(MODE === 'fly' && document.pointerLockElement) document.exitPointerLock(); }
+  if(e.code === 'KeyV'){ player.firstPerson = !player.firstPerson; }
+  if(e.code === 'KeyE' || e.code === 'KeyQ'){ releaseGrapple(true); }
+  if(e.code === 'KeyR'){ spawnPlayer(); }
+  if(e.code === 'KeyH'){ document.getElementById('keys').classList.toggle('min'); }
 });
 addEventListener('keyup',   e=>{ flyKeys[e.code] = false; });
 canvas.addEventListener('mousedown', e=>{ if(ACT==='city') fly.on = true; });
@@ -3085,7 +3130,13 @@ function updateFly(dt){
 
 /* ---- per-frame city update ----------------------------------------------- */
 function updateCity(dt, t){
-  updateFly(dt);
+  if(MODE === 'play'){
+    updatePlayer(dt);
+    updatePlayerCamera(dt);
+    updatePlayerRig(dt, t);
+  } else {
+    updateFly(dt);
+  }
   updateGround(dt, t);
   updateSites(dt, t);
   updateLobbies();
@@ -5083,11 +5134,465 @@ function updateLobbies(){
     L.bench.length+'benches', L.dump.length+'dumpsters', arms.length+'shop signs');
 })();
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   20. TRAVERSAL — run, jump, momentum swing, dive-glide, the long fall
+   ══════════════════════════════════════════════════════════════════════════ */
+/* Tuning carried over from the rooftop prototype, with the grapple lengthened
+   for the bigger map (verified: no tall roof is orphaned at 120m). */
+const PCFG = {
+  radius:0.55, height:1.9, eye:1.62,
+  runSpeed:12, sprintSpeed:16.5, groundAccel:65,
+  moveFriction:3.0, stopFriction:9.0, stopSpeed:3, turnResponse:9,
+  jumpSpeed:11.5, gravityRise:26, gravityApex:14, gravityFall:40,
+  apexWindow:3.2, shortHopMult:1.9, coyoteTime:0.12, jumpBuffer:0.14,
+  airAccel:24, airCapFactor:0.55,
+  glideMinFall:-2.5, glideGravity:8, glideTermV:8.5, glideAccel:28, glideMaxSpeed:19,
+  glideLiftTime:1.6, glideLiftSpeed:7.0, glideLiftAccel:26,
+  diveGravity:34, diveMaxSpeed:38, diveTermV:34, pullUpGain:0.62,
+  grappleRange:120, grappleTravel:300, grappleCooldown:0.28, ropeMin:5,
+  swingBoost:1.18, releaseBoost:4.2,
+  plummetSpeed:19, plummetFov:24, plummetShake:0.42,
+  safeFall:16, fallDamage:4.6, maxHealth:100
+};
+
+const player = {
+  pos: new THREE.Vector3(0, 40, 120), vel: new THREE.Vector3(),
+  yaw: Math.PI, facing: Math.PI, grounded:false, gliding:false, diving:false,
+  lift: PCFG.glideLiftTime, coyote:0, buffer:0, apexY:0, health:PCFG.maxHealth,
+  spaceHeld:false, firstPerson:false, dead:false
+};
+const grapple = { state:'idle', anchor:new THREE.Vector3(), hookPos:new THREE.Vector3(),
+                  length:0, cooldown:0 };
+const cam = { yaw: Math.PI, pitch: -0.10, dist: 6.4, shake:0, fov:62 };
+
+/* ---- collision index: colliders bucketed by block ------------------------ */
+const COL_CELL = CITY.block;
+const colGrid = new Map();
+const colKey = (i,j)=> i*1000 + j;
+(function indexColliders(){
+  for(const c of cityColliders){
+    const i0 = Math.floor((c.x-c.hw)/COL_CELL), i1 = Math.floor((c.x+c.hw)/COL_CELL);
+    const j0 = Math.floor((c.z-c.hd)/COL_CELL), j1 = Math.floor((c.z+c.hd)/COL_CELL);
+    for(let i=i0;i<=i1;i++) for(let j=j0;j<=j1;j++){
+      const k = colKey(i,j);
+      if(!colGrid.has(k)) colGrid.set(k, []);
+      colGrid.get(k).push(c);
+    }
+  }
+})();
+const _near = [];
+function collidersNear(x, z){
+  _near.length = 0;
+  const i = Math.floor(x/COL_CELL), j = Math.floor(z/COL_CELL);
+  for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++){
+    const list = colGrid.get(colKey(i+a, j+b));
+    if(list) for(const c of list) if(_near.indexOf(c) < 0) _near.push(c);
+  }
+  return _near;
+}
+/* pavement stands 0.36 proud of the carriageway */
+function pavementAt(x, z){
+  const lot = CITY.block - CITY.street;
+  const cx = Math.round(x/CITY.block), cz = Math.round(z/CITY.block);
+  const dx = Math.abs(x - cx*CITY.block), dz = Math.abs(z - cz*CITY.block);
+  return (dx <= lot*0.5 && dz <= lot*0.5) ? 0.36 : 0.0;
+}
+function groundAt(x, z, fromY){
+  let g = pavementAt(x, z);
+  for(const c of collidersNear(x, z)){
+    if(x > c.x-c.hw && x < c.x+c.hw && z > c.z-c.hd && z < c.z+c.hd){
+      if(c.top <= fromY + 0.35 && c.top > g) g = c.top;
+    }
+  }
+  return g;
+}
+/* push the capsule out of any box it has entered */
+function resolveWalls(p){
+  const r = PCFG.radius;
+  for(const c of collidersNear(p.x, p.z)){
+    if(p.y + PCFG.height*0.35 > c.top) continue;      // standing on or above it
+    const dx = p.x - c.x, dz = p.z - c.z;
+    const ox = c.hw + r - Math.abs(dx), oz = c.hd + r - Math.abs(dz);
+    if(ox > 0 && oz > 0){
+      if(ox < oz){ p.x = c.x + Math.sign(dx||1)*(c.hw + r); player.vel.x = 0; }
+      else       { p.z = c.z + Math.sign(dz||1)*(c.hd + r); player.vel.z = 0; }
+    }
+  }
+}
+/* analytic ray vs the collider boxes — far cheaper than raycasting the meshes */
+function rayCity(orig, dir, maxT){
+  let bestT = maxT, hit = null, hitN = null;
+  for(const c of cityColliders){
+    const dxc = c.x - orig.x, dzc = c.z - orig.z;
+    if(dxc*dxc + dzc*dzc > (maxT + 80)*(maxT + 80)) continue;
+    const bx0=c.x-c.hw, bx1=c.x+c.hw, bz0=c.z-c.hd, bz1=c.z+c.hd, by1=c.top;
+    let t0 = 0, t1 = bestT, nAxis = 0, nSign = 1;
+    for(const [o,d,lo,hi,axis] of [[orig.x,dir.x,bx0,bx1,0],[orig.y,dir.y,-2,by1,1],[orig.z,dir.z,bz0,bz1,2]]){
+      if(Math.abs(d) < 1e-6){ if(o < lo || o > hi){ t0 = 1e9; break; } continue; }
+      let ta = (lo-o)/d, tb = (hi-o)/d, sgn = -1;
+      if(ta > tb){ const s=ta; ta=tb; tb=s; sgn = 1; }
+      if(ta > t0){ t0 = ta; nAxis = axis; nSign = sgn; }
+      if(tb < t1) t1 = tb;
+      if(t0 > t1) { t0 = 1e9; break; }
+    }
+    if(t0 < bestT && t0 > 0.4 && t0 <= t1){
+      bestT = t0; hit = c;
+      hitN = nAxis === 0 ? [nSign,0,0] : nAxis === 1 ? [0,nSign,0] : [0,0,nSign];
+    }
+  }
+  return hit ? { t:bestT, box:hit, n:hitN } : null;
+}
+
+/* ---- input --------------------------------------------------------------- */
+let MODE = 'play';                    // 'play' | 'fly'
+const _rope = (function(){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const m = new THREE.LineBasicMaterial({ color:0x9fb4d0, transparent:true, opacity:0.85 });
+  const l = new THREE.Line(g, m); l.frustumCulled = false; l.visible = false;
+  cityScene.add(l); return l;
+})();
+const hook = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 6),
+              new THREE.MeshStandardMaterial({ color:0x8d949e, roughness:0.4, metalness:0.9 }));
+hook.visible = false; cityScene.add(hook);
+
+canvas.addEventListener('click', ()=>{
+  if(ACT !== 'city') return;
+  if(MODE === 'play' && document.pointerLockElement !== canvas) canvas.requestPointerLock();
+});
+addEventListener('mousemove', e=>{
+  if(ACT !== 'city' || MODE !== 'play' || document.pointerLockElement !== canvas) return;
+  cam.yaw  -= e.movementX * 0.0022;
+  cam.pitch = clamp(cam.pitch - e.movementY * 0.0022, -1.25, 1.05);
+});
+addEventListener('mousedown', e=>{
+  if(ACT !== 'city' || MODE !== 'play' || document.pointerLockElement !== canvas) return;
+  if(e.button === 0) fireGrapple();
+  if(e.button === 2) releaseGrapple(true);
+});
+addEventListener('contextmenu', e=>{ if(ACT === 'city') e.preventDefault(); });
+
+/* ---- grapple ------------------------------------------------------------- */
+const _gDir = new THREE.Vector3(), _gOrig = new THREE.Vector3(), _tmpA = new THREE.Vector3();
+function ropeOrigin(out){ return out.set(player.pos.x, player.pos.y + PCFG.height*0.72, player.pos.z); }
+function fireGrapple(){
+  if(grapple.cooldown > 0 || grapple.state !== 'idle') return;
+  ropeOrigin(_gOrig);
+  cityCam.getWorldDirection(_gDir);
+  const hit = rayCity(_gOrig, _gDir, PCFG.grappleRange);
+  if(!hit){ grapple.cooldown = 0.18; return; }
+  grapple.anchor.copy(_gOrig).addScaledVector(_gDir, hit.t);
+  grapple.hookPos.copy(_gOrig);
+  grapple.length = Math.max(PCFG.ropeMin, hit.t * 0.92);
+  grapple.state = 'firing';
+}
+function releaseGrapple(launch){
+  if(grapple.state === 'latched' && launch){
+    const sp = player.vel.length();
+    // a well-timed release at the bottom of the arc converts swing into distance
+    if(player.vel.y > -1.5 && sp > 6){
+      player.vel.multiplyScalar(PCFG.swingBoost);
+      player.vel.y += PCFG.releaseBoost;
+    }
+    player.lift = PCFG.glideLiftTime;
+  }
+  grapple.state = 'idle'; grapple.cooldown = PCFG.grappleCooldown;
+  _rope.visible = false; hook.visible = false;
+}
+function updateGrapple(dt){
+  grapple.cooldown = Math.max(0, grapple.cooldown - dt);
+  if(grapple.state === 'firing'){
+    const step = PCFG.grappleTravel * dt;
+    if(grapple.hookPos.distanceTo(grapple.anchor) <= step){
+      grapple.hookPos.copy(grapple.anchor);
+      grapple.state = 'latched';
+      ropeOrigin(_tmpA);
+      grapple.length = Math.max(PCFG.ropeMin, _tmpA.distanceTo(grapple.anchor));
+    } else {
+      grapple.hookPos.lerp(grapple.anchor, Math.min(1, step/grapple.hookPos.distanceTo(grapple.anchor)));
+    }
+  }
+  const active = grapple.state !== 'idle';
+  _rope.visible = active; hook.visible = active;
+  if(active){
+    ropeOrigin(_tmpA);
+    const end = grapple.state === 'latched' ? grapple.anchor : grapple.hookPos;
+    const pa = _rope.geometry.attributes.position;
+    pa.setXYZ(0, _tmpA.x, _tmpA.y, _tmpA.z);
+    pa.setXYZ(1, end.x, end.y, end.z);
+    pa.needsUpdate = true;
+    _rope.geometry.computeBoundingSphere();
+    hook.position.copy(end);
+    hook.lookAt(_tmpA);
+  }
+}
+/* pendulum: keep the rope taut, strip the radial component, reel in slightly */
+function applySwing(dt, wish){
+  ropeOrigin(_tmpA);
+  const d = _tmpA.distanceTo(grapple.anchor);
+  if(d > grapple.length){
+    _gDir.subVectors(_tmpA, grapple.anchor).normalize();
+    const over = d - grapple.length;
+    player.pos.addScaledVector(_gDir, -over);
+    const radial = player.vel.dot(_gDir);
+    if(radial > 0) player.vel.addScaledVector(_gDir, -radial);
+    // steering into the swing keeps the arc alive
+    player.vel.addScaledVector(wish, PCFG.groundAccel * 0.11 * dt);
+  }
+  if(flyKeys.ShiftLeft) grapple.length = Math.max(PCFG.ropeMin, grapple.length - 14*dt);
+  if(flyKeys.ControlLeft) grapple.length += 10*dt;
+}
+
+/* ---- the long fall ------------------------------------------------------- */
+const STREAK_N = 160;
+const streaks = (function(){
+  const g = new THREE.BoxGeometry(0.02, 1, 0.02);
+  const m = new THREE.MeshBasicMaterial({ color:0xcfe0ff, transparent:true, opacity:0.0,
+              blending:THREE.AdditiveBlending, depthWrite:false });
+  const im = new THREE.InstancedMesh(g, m, STREAK_N);
+  im.frustumCulled = false; im.visible = false; cityScene.add(im);
+  const seeds = [];
+  for(let i=0;i<STREAK_N;i++) seeds.push({a:rand()*6.28, r:1.5+rand()*7, y:rand()*40-20, s:0.5+rand()});
+  return {im, m, seeds};
+})();
+function updateFallFX(dt){
+  const falling = !player.grounded && !player.gliding && grapple.state !== 'latched'
+                  && player.vel.y < -PCFG.plummetSpeed;
+  const k = falling ? clamp((-player.vel.y - PCFG.plummetSpeed) / 26, 0, 1) : 0;
+  player.plummet = (player.plummet||0) + ((falling ? k : 0) - (player.plummet||0)) * Math.min(1, dt*4);
+  const p = player.plummet;
+  streaks.im.visible = p > 0.02;
+  streaks.m.opacity = p * 0.6;
+  if(streaks.im.visible){
+    const M = _gM, Q = _gQ, P = _gP, S = _gS;
+    for(let i=0;i<STREAK_N;i++){
+      const sd = streaks.seeds[i];
+      sd.y += (34 + 60*p) * dt * sd.s;
+      if(sd.y > 26) sd.y -= 52;
+      P.set(cityCam.position.x + Math.cos(sd.a)*sd.r,
+            cityCam.position.y + sd.y - 12,
+            cityCam.position.z + Math.sin(sd.a)*sd.r);
+      Q.identity(); S.set(1, 3 + 22*p*sd.s, 1);
+      streaks.im.setMatrixAt(i, M.compose(P,Q,S));
+    }
+    streaks.im.instanceMatrix.needsUpdate = true;
+    S.set(1,1,1);
+  }
+  cam.shake = Math.max(cam.shake, p * PCFG.plummetShake);
+  if(AUDIO.ready) AUDIO.setIntensity(0.34 + p*0.6);
+}
+
+/* ---- the controller ------------------------------------------------------ */
+const _wish = new THREE.Vector3(), _fwd = new THREE.Vector3(), _rgt = new THREE.Vector3();
+function updatePlayer(dt){
+  const k = flyKeys;
+  _fwd.set(Math.sin(cam.yaw), 0, Math.cos(cam.yaw));
+  _rgt.set(Math.sin(cam.yaw - Math.PI/2), 0, Math.cos(cam.yaw - Math.PI/2));
+  _wish.set(0,0,0);
+  if(k.KeyW) _wish.add(_fwd);
+  if(k.KeyS) _wish.sub(_fwd);
+  if(k.KeyD) _wish.add(_rgt);
+  if(k.KeyA) _wish.sub(_rgt);
+  const hasInput = _wish.lengthSq() > 0;
+  if(hasInput) _wish.normalize();
+  const sprinting = !!k.ShiftLeft;
+  const swinging = grapple.state === 'latched';
+
+  // jump buffering and coyote time
+  player.coyote = player.grounded ? PCFG.coyoteTime : Math.max(0, player.coyote - dt);
+  if(k.Space && !player.spaceHeld) player.buffer = PCFG.jumpBuffer;
+  else player.buffer = Math.max(0, player.buffer - dt);
+  const spaceTapped = k.Space && !player.spaceHeld;
+  player.spaceHeld = !!k.Space;
+
+  if(player.buffer > 0 && player.coyote > 0 && !swinging){
+    player.vel.y = PCFG.jumpSpeed;
+    player.grounded = false; player.buffer = 0; player.coyote = 0;
+    player.apexY = player.pos.y;
+  }
+
+  // glide / dive
+  const airborne = !player.grounded;
+  const wantGlide = k.Space && airborne && !swinging && player.vel.y < PCFG.glideMinFall;
+  if(wantGlide && !player.gliding && !spaceTapped) player.gliding = true;
+  if(player.grounded || swinging) player.gliding = false;
+  if(!k.Space) player.gliding = false;
+  player.diving = player.gliding && !!(k.KeyS || k.ControlLeft);
+
+  if(player.gliding){
+    const g = player.diving ? PCFG.diveGravity : PCFG.glideGravity;
+    const term = player.diving ? PCFG.diveTermV : PCFG.glideTermV;
+    player.vel.y -= g*dt;
+    if(player.vel.y < -term) player.vel.y = -term;
+    // pulling out of a dive trades vertical speed for forward distance
+    if(!player.diving && player.wasDiving){
+      const conv = Math.min(-player.vel.y, 26) * PCFG.pullUpGain;
+      player.vel.addScaledVector(_fwd, conv);
+      player.vel.y += conv*0.42;
+    }
+    const acc = player.diving ? PCFG.glideAccel*1.6 : PCFG.glideAccel;
+    const cap = player.diving ? PCFG.diveMaxSpeed : PCFG.glideMaxSpeed;
+    if(hasInput) player.vel.addScaledVector(_wish, acc*dt);
+    const hs = Math.hypot(player.vel.x, player.vel.z);
+    if(hs > cap){ const f = cap/hs; player.vel.x*=f; player.vel.z*=f; }
+    // a short, spendable budget of climb
+    if(k.KeyW && player.lift > 0 && !player.diving){
+      player.lift -= dt;
+      player.vel.y += PCFG.glideLiftAccel*dt;
+      if(player.vel.y > PCFG.glideLiftSpeed) player.vel.y = PCFG.glideLiftSpeed;
+    }
+  } else if(!swinging){
+    const rising = player.vel.y > PCFG.apexWindow, apex = Math.abs(player.vel.y) <= PCFG.apexWindow;
+    let g = rising ? PCFG.gravityRise : apex ? PCFG.gravityApex : PCFG.gravityFall;
+    if(rising && !k.Space) g *= PCFG.shortHopMult;
+    if(!player.grounded) player.vel.y -= g*dt;
+  } else {
+    player.vel.y -= PCFG.gravityFall*0.82*dt;
+  }
+  player.wasDiving = player.diving;
+
+  // horizontal drive
+  if(!player.gliding && !swinging){
+    const top = sprinting ? PCFG.sprintSpeed : PCFG.runSpeed;
+    if(player.grounded){
+      const sp = Math.hypot(player.vel.x, player.vel.z);
+      const fr = hasInput ? PCFG.moveFriction : PCFG.stopFriction;
+      const drop = Math.max(sp, PCFG.stopSpeed) * fr * dt;
+      const nf = Math.max(0, sp - drop) / (sp || 1);
+      player.vel.x *= nf; player.vel.z *= nf;
+      if(hasInput){
+        const cur = player.vel.x*_wish.x + player.vel.z*_wish.z;
+        const add = Math.min(PCFG.groundAccel*dt, Math.max(0, top - cur));
+        player.vel.addScaledVector(_wish, add);
+      }
+    } else if(hasInput){
+      const cur = player.vel.x*_wish.x + player.vel.z*_wish.z;
+      const add = Math.min(PCFG.airAccel*dt, Math.max(0, top*PCFG.airCapFactor - cur));
+      player.vel.addScaledVector(_wish, add);
+    }
+  }
+
+  if(swinging) applySwing(dt, _wish);
+
+  // integrate, then resolve
+  player.pos.addScaledVector(player.vel, dt);
+  resolveWalls(player.pos);
+  const gy = groundAt(player.pos.x, player.pos.z, player.pos.y);
+  if(player.pos.y <= gy + 0.001 && player.vel.y <= 0){
+    if(!player.grounded){
+      const drop = player.apexY - player.pos.y;
+      if(drop > PCFG.safeFall) player.health = Math.max(0, player.health - (drop-PCFG.safeFall)*PCFG.fallDamage);
+      cam.shake = Math.max(cam.shake, Math.min(0.35, drop*0.006));
+    }
+    player.pos.y = gy; player.vel.y = 0;
+    player.grounded = true; player.gliding = false;
+    player.lift = PCFG.glideLiftTime; player.apexY = player.pos.y;
+  } else {
+    player.grounded = false;
+    if(player.vel.y > 0) player.apexY = Math.max(player.apexY, player.pos.y);
+  }
+  if(player.pos.y > player.apexY && !player.grounded) player.apexY = player.pos.y;
+
+  // face travel
+  const sp2 = Math.hypot(player.vel.x, player.vel.z);
+  if(sp2 > 0.7){
+    const want = Math.atan2(player.vel.x, player.vel.z);
+    let diff = want - player.facing;
+    while(diff >  Math.PI) diff -= Math.PI*2;
+    while(diff < -Math.PI) diff += Math.PI*2;
+    player.facing += diff * Math.min(1, dt*PCFG.turnResponse);
+  }
+  updateGrapple(dt);
+  updateFallFX(dt);
+
+  // death and respawn
+  if(player.health <= 0 && !player.dead){
+    player.dead = true; player.deadFor = 0;
+    releaseGrapple(false); cam.shake = 0.5;
+  }
+  if(player.dead){
+    player.deadFor += dt;
+    if(player.deadFor > 1.9){
+      player.dead = false; player.health = PCFG.maxHealth; spawnPlayer();
+    }
+  }
+}
+
+/* ---- camera -------------------------------------------------------------- */
+function updatePlayerCamera(dt){
+  cam.shake = Math.max(0, cam.shake - dt*0.9);
+  const sp = Math.hypot(player.vel.x, player.vel.z);
+  const wantFov = 62 + Math.min(sp/PCFG.glideMaxSpeed, 1.4)*9
+                  + (player.plummet||0)*PCFG.plummetFov + (player.gliding ? 5 : 0);
+  cam.fov += (wantFov - cam.fov) * Math.min(1, dt*3.5);
+  if(Math.abs(cityCam.fov - cam.fov) > 0.01){ cityCam.fov = cam.fov; cityCam.updateProjectionMatrix(); }
+
+  const eye = _tmpA.set(player.pos.x, player.pos.y + PCFG.eye, player.pos.z);
+  if(player.firstPerson){
+    cityCam.position.copy(eye);
+  } else {
+    const cp = Math.cos(cam.pitch);
+    _gDir.set(-Math.sin(cam.yaw)*cp, -Math.sin(cam.pitch), -Math.cos(cam.yaw)*cp);
+    let dist = cam.dist + (player.gliding ? 1.8 : 0);
+    const back = rayCity(eye, _gDir, dist + 0.6);   // don't clip into walls
+    if(back) dist = Math.max(1.4, back.t - 0.5);
+    cityCam.position.copy(eye).addScaledVector(_gDir, dist);
+    cityCam.position.y = Math.max(cityCam.position.y, groundAt(cityCam.position.x, cityCam.position.z, cityCam.position.y) + 0.5);
+  }
+  if(cam.shake > 0){
+    const t = performance.now()*0.001;
+    cityCam.position.x += Math.sin(t*61)*cam.shake*0.5;
+    cityCam.position.y += Math.sin(t*77+1.4)*cam.shake*0.45;
+  }
+  const look = player.firstPerson
+    ? _gP.copy(eye).addScaledVector(_gDir.set(Math.sin(cam.yaw)*Math.cos(cam.pitch),
+        Math.sin(cam.pitch), Math.cos(cam.yaw)*Math.cos(cam.pitch)), 10)
+    : _gP.set(eye.x, eye.y + 0.4, eye.z);
+  cityCam.lookAt(look);
+  if(cam.shake > 0) cityCam.rotation.z += Math.sin(performance.now()*0.043)*cam.shake*0.12;
+}
+
+/* ---- drive the Batman rig ------------------------------------------------ */
+let playerWalkPhase = 0;
+function updatePlayerRig(dt, t){
+  const b = batman;
+  if(b.root.parent !== cityScene) cityScene.add(b.root);
+  b.root.visible = !player.firstPerson;
+  b.root.position.set(player.pos.x, player.pos.y, player.pos.z);
+  b.root.rotation.y = player.facing;
+  const sp = Math.hypot(player.vel.x, player.vel.z);
+  playerWalkPhase += sp * 0.30 * dt * 10;
+  const amt = player.grounded ? clamp(sp/PCFG.runSpeed, 0, 1) : 0;
+  poseWalk(b, playerWalkPhase, amt, t);
+  if(!player.grounded){
+    const spread = player.gliding ? 1 : 0.35;
+    b.arms.forEach(A=>{ A.sh.rotation.z = A.side*(0.25 + spread*0.95); A.sh.rotation.x = -0.5*spread; A.el.rotation.x = -0.25*spread; });
+    b.legs.forEach(L=>{ L.hp.rotation.x = player.gliding ? 0.15 : -0.25; L.kn.rotation.x = player.gliding ? 0.1 : 0.5; });
+    b.torso.rotation.x = player.diving ? 0.55 : player.gliding ? 0.30 : 0.08;
+  }
+  updateCape(t, player.gliding ? 1.5 : clamp(sp/PCFG.runSpeed, 0, 1.2));
+  // hero rim follows as it does in the cutscene
+  _heroDir.set(player.pos.x-cityCam.position.x, 0, player.pos.z-cityCam.position.z).normalize();
+  heroRim.position.set(player.pos.x + _heroDir.x*1.25, player.pos.y + 2.1, player.pos.z + _heroDir.z*1.25);
+  heroKey.position.set(player.pos.x - _heroDir.x*0.95, player.pos.y + 1.9, player.pos.z - _heroDir.z*0.95);
+}
+
+function spawnPlayer(){
+  const r = cityRoofs.filter(o=>o.y > 60 && o.y < 130);
+  const s = r[(rand()*r.length)|0] || {x:0, y:40, z:0};
+  player.pos.set(s.x, s.y + 1.2, s.z);
+  player.vel.set(0,0,0); player.grounded = false; player.apexY = player.pos.y;
+  cam.yaw = Math.atan2(-s.x, -s.z);
+}
+
 window.GOTHAM = {
   get act(){ return ACT; }, setAct:(a)=>setAct(a),
   scene:()=>cityScene, cam:()=>cityCam, CITY,
   roofs:()=>cityRoofs, colliders:()=>cityColliders, HALL, rooms:()=>HALL_ROOMS,
   sites:()=>siteGroups, RESERVED, doors:()=>cityDoors, lobbies:()=>lobbies,
+  player, grapple, cam, spawn:()=>spawnPlayer(), get mode(){return MODE;}, setMode:m=>MODE=m,
+  fire:()=>fireGrapple(), release:(l)=>releaseGrapple(l), ray:(o,d,t)=>rayCity(o,d,t),
   view(p, look){ cityCam.position.set(p[0],p[1],p[2]);
     if(look){ const d=new THREE.Vector3(look[0]-p[0],look[1]-p[1],look[2]-p[2]).normalize();
       fly.yaw = Math.atan2(d.x, d.z); fly.pitch = Math.asin(clamp(d.y,-1,1)); }
@@ -5097,6 +5602,7 @@ window.GOTHAM = {
 /* warm up shaders, then start */
 if(new URLSearchParams(location.search).get('act') === 'city'){
   setAct('city');   // the click-gate stays: it is what unlocks the audio context
+  spawnPlayer();
 }
 renderer.compile(scene, camera);
 renderer.compile(cityScene, cityCam);
