@@ -39,21 +39,21 @@
          transition:opacity .32s ease; }
   #det.on { opacity:1; }
   #det .tint { position:absolute; inset:0; background:
-      radial-gradient(ellipse 27% 40% at 26% 41%, rgba(40,190,220,.04) 0%, rgba(4,12,20,.30) 60%, rgba(0,0,0,.97) 82%),
-      radial-gradient(ellipse 27% 40% at 74% 41%, rgba(40,190,220,.04) 0%, rgba(4,12,20,.30) 60%, rgba(0,0,0,.97) 82%); }
-  #det .scan { position:absolute; inset:0; opacity:.30; background:repeating-linear-gradient(
+      radial-gradient(ellipse 74% 88% at 50% 46%, rgba(0,0,0,0) 0%, rgba(0,0,0,0) 56%, rgba(2,6,11,.55) 78%, rgba(0,0,0,.92) 100%); }
+  #det .scan { position:absolute; inset:0; opacity:.10; background:repeating-linear-gradient(
       0deg, rgba(120,230,255,.16) 0px, rgba(120,230,255,.16) 1px, transparent 1px, transparent 4px); }
   /* the cowl itself: opaque mask with two angled eye slits cut through it */
   #det .cowl { position:absolute; inset:0; background:#000;
       -webkit-mask:var(--slits); mask:var(--slits); }
-  #det .lens { position:absolute; top:19%; height:46%; width:39%;
-      border:1px solid rgba(120,230,255,.34); border-radius:52% 16% 22% 46%;
-      box-shadow:inset 0 0 60px rgba(60,200,240,.09); }
-  #det .lens.l { left:5.5%; }
-  #det .lens.r { right:5.5%; transform:scaleX(-1); }
-  #det .bridge { position:absolute; left:50%; top:14%; width:4.5%; height:56%;
-      margin-left:-2.25%; background:#05070a; border-left:1px solid rgba(120,230,255,.18);
-      border-right:1px solid rgba(120,230,255,.18); }
+  /* the slits are outlines only — the view through them stays clear */
+  #det .lens { position:absolute; top:12%; height:62%; width:44%;
+      border:2px solid rgba(120,230,255,.30); border-radius:48% 14% 20% 44%;
+      box-shadow:0 0 30px rgba(60,200,240,.10) inset; }
+  #det .lens.l { left:2.5%; }
+  #det .lens.r { right:2.5%; transform:scaleX(-1); }
+  #det .bridge { position:absolute; left:50%; top:10%; width:2.2%; height:62%;
+      margin-left:-1.1%; background:linear-gradient(180deg,rgba(4,8,13,.85),rgba(4,8,13,.25));
+      border-left:1px solid rgba(120,230,255,.22); border-right:1px solid rgba(120,230,255,.22); }
   #det .brk { position:absolute; width:26px; height:26px; border:2px solid rgba(120,230,255,.55); }
   #det .brk.tl{ top:9vh; left:22px; border-right:0; border-bottom:0; }
   #det .brk.tr{ top:9vh; right:22px; border-left:0; border-bottom:0; }
@@ -172,6 +172,11 @@
   <div class="row"><span>Climb line</span><span class="k">Hold left click</span></div>
   <div class="row"><span>Let go</span><span class="k">Right click / Q</span></div>
   <div class="row"><span>Enter / use</span><span class="k">E</span></div>
+  <div class="sec"></div>
+  <div class="row"><span>Strike / combo</span><span class="k">X</span></div>
+  <div class="row"><span>Kick</span><span class="k">Z</span></div>
+  <div class="row"><span>Batarang</span><span class="k">B</span></div>
+  <div class="row"><span>Roll</span><span class="k">C</span></div>
   <div class="sec"></div>
   <div class="row"><span>Free cam</span><span class="k">F</span></div>
   <div class="row"><span>Respawn</span><span class="k">R</span></div>
@@ -2467,6 +2472,9 @@ const lampBase = lamp.intensity, fireBase = fireLight.intensity;
 
 function frame(dtReal){
   syncSize();
+  /* the scene plays behind the click-gate as a preview, but it must not hand
+     off until you have actually started — and the click rewinds it to zero */
+  if(!started && ACT === 'cutscene' && elapsed > LOOP - 2) elapsed = 1.5;
   const ts = timeScale();                 // hit-stop / slow-mo on the finishers
   const dt = dtReal * ts;
   elapsed += dt;
@@ -2616,7 +2624,7 @@ function frame(dtReal){
   else if(t > LOOP-1.6)   fade = easeOut((t-(LOOP-1.6))/1.6);
   /* the Joker's laugh plays out, the camera pulls back, and we cut to the
      open world rather than looping the scene */
-  if(!handedOff && elapsed >= LOOP - 0.12){
+  if(started && !handedOff && elapsed >= LOOP - 0.12){
     handedOff = true; setAct('city'); spawnPlayer(); cityFadeIn = 1.5;
   }
   updateAudio(t, dtReal);
@@ -2859,7 +2867,7 @@ function setCaption(kind){
 
 /* ---- dialogue / score cueing off the story clock -------------------------- */
 const CUE = { batPlayed:false, jokPlayed:false, lastT:0 };
-let handedOff = false, cityFadeIn = 0;
+let handedOff = false, cityFadeIn = 0, started = false;
 function updateAudio(t, dtReal){
   // score intensity follows the sequence
   let inten = 0.25;
@@ -2901,6 +2909,7 @@ function updateAudio(t, dtReal){
     startEl.classList.add('gone');
     setTimeout(()=>startEl.remove(), 700);
     AUDIO.start(); AUDIO.setVolume(volEl.value/100);
+    started = true;
     if(ACT !== 'city'){ elapsed = 0; CUE.batPlayed = CUE.jokPlayed = false; CUE.lastT = 0; }
   };
   startEl.addEventListener('click', begin);
@@ -3201,6 +3210,10 @@ addEventListener('keydown', e=>{ flyKeys[e.code] = true;
     detEl.classList.toggle('on', DETECTIVE);
   }
   if(e.code === 'KeyQ'){ releaseGrapple(true); }
+  if(e.code === 'KeyB'){ startMove('batarang'); }
+  if(e.code === 'KeyC'){ startMove('roll'); }
+  if(e.code === 'KeyX'){ startMove(combat.chain === 2 ? 'uppercut' : 'jab'); }
+  if(e.code === 'KeyZ'){ startMove('kick'); }
   if(e.code === 'KeyE'){
     if(player.lobby) exitDoor(); else if(nearDoor) enterDoor(); else releaseGrapple(true);
   }
@@ -5793,6 +5806,7 @@ function updatePlayerRig(dt, t){
     b.legs.forEach(L=>{ L.hp.rotation.x = player.gliding ? 0.15 : -0.25; L.kn.rotation.x = player.gliding ? 0.1 : 0.5; });
     b.torso.rotation.x = player.diving ? 0.55 : player.gliding ? 0.30 : 0.08;
   }
+  if(updateCombat(dt, t)) { /* the move owns the rig this frame */ }
   updateCape(t, player.gliding ? 1.5 : clamp(sp/PCFG.runSpeed, 0, 1.2));
   // hero rim follows as it does in the cutscene
   _heroDir.set(player.pos.x-cityCam.position.x, 0, player.pos.z-cityCam.position.z).normalize();
@@ -5894,6 +5908,134 @@ function spawnPlayer(){
   player.pos.set(s.x, s.y + 1.2, s.z);
   player.vel.set(0,0,0); player.grounded = false; player.apexY = player.pos.y;
   cam.yaw = Math.atan2(-s.x, -s.z);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   21. COMBAT — batarang, jab, uppercut, kick, roll
+   ══════════════════════════════════════════════════════════════════════════ */
+const CB = {
+  jab   : pose({hipY:-0.06, hipYaw:-0.30, torY:-0.50, torX:0.14, fwd:0.26,
+                rShX:-1.58, rShZ:-0.06, rElX:-0.06, lShX:-0.50, lShZ:0.46, lElX:-2.10,
+                rHpX:0.40, rKnX:0.14, lHpX:-0.20, lKnX:0.46}),
+  windup: pose({hipY:-0.14, hipYaw:0.36, torY:0.50, torX:0.20,
+                rShX:0.24, rShZ:-0.52, rElX:-1.85, lShX:-0.72, lShZ:0.40, lElX:-1.95,
+                rHpX:-0.34, rKnX:0.56, lHpX:0.30, lKnX:0.50}),
+  upper : pose({hipY:0.14, hipYaw:-0.26, torY:-0.34, torX:-0.30, hdX:-0.22, fwd:0.20,
+                rShX:-2.55, rShZ:-0.20, rElX:-0.70, lShX:-0.55, lShZ:0.52, lElX:-2.05,
+                rHpX:0.16, rKnX:0.06, lHpX:-0.10, lKnX:0.22}),
+  kick  : pose({hipY:-0.04, hipZ:-0.20, torX:-0.34, torY:0.16, fwd:0.16,
+                rShX:-0.60, rShZ:-0.85, rElX:-0.90, lShX:-0.70, lShZ:0.85, lElX:-0.95,
+                rHpX:-1.42, rKnX:0.10, rAnX:-0.30, lHpX:0.24, lKnX:0.34}),
+  recov : pose({hipY:-0.08, torX:0.12, torY:0.06,
+                lShX:-0.58, lShZ:0.26, lElX:-2.05, rShX:-0.52, rShZ:-0.28, rElX:-2.10,
+                lHpX:0.16, lKnX:0.32, rHpX:-0.10, rKnX:0.26}),
+  roll  : pose({hipY:-0.62, torX:1.05, hdX:0.45,
+                lShX:-2.30, lShZ:0.55, lElX:-2.35, rShX:-2.30, rShZ:-0.55, rElX:-2.35,
+                lHpX:1.45, lKnX:2.05, rHpX:1.45, rKnX:2.05}),
+  throw : pose({hipY:-0.05, hipYaw:-0.34, torY:-0.55, torX:0.10, fwd:0.10,
+                rShX:-1.30, rShZ:-0.72, rElX:-0.30, lShX:-0.62, lShZ:0.40, lElX:-1.85,
+                rHpX:0.28, rKnX:0.18, lHpX:-0.14, lKnX:0.40})
+};
+/* each move is a little keyframe track, sampled the same way the cutscene is */
+const MOVES = {
+  jab:     { dur:0.42, hit:0.16, keys:[{t:0,p:CB.recov},{t:0.14,p:CB.jab,snap:true},
+                                       {t:0.26,p:CB.jab},{t:0.42,p:CB.recov}] },
+  uppercut:{ dur:0.70, hit:0.30, keys:[{t:0,p:CB.recov},{t:0.20,p:CB.windup},
+                                       {t:0.34,p:CB.upper,snap:true},{t:0.50,p:CB.upper},
+                                       {t:0.70,p:CB.recov}] },
+  kick:    { dur:0.62, hit:0.26, keys:[{t:0,p:CB.recov},{t:0.16,p:CB.windup},
+                                       {t:0.30,p:CB.kick,snap:true},{t:0.44,p:CB.kick},
+                                       {t:0.62,p:CB.recov}] },
+  roll:    { dur:0.66, hit:-1,   keys:[{t:0,p:CB.recov},{t:0.16,p:CB.roll,snap:true},
+                                       {t:0.44,p:CB.roll},{t:0.66,p:CB.recov}] },
+  batarang:{ dur:0.52, hit:0.18, keys:[{t:0,p:CB.recov},{t:0.14,p:CB.windup},
+                                       {t:0.24,p:CB.throw,snap:true},{t:0.36,p:CB.throw},
+                                       {t:0.52,p:CB.recov}] }
+};
+const combat = { move:null, t:0, hitDone:false, chain:0, chainT:0 };
+function startMove(name){
+  if(combat.move && combat.t < MOVES[combat.move].dur * 0.62) return;   // let it land first
+  combat.move = name; combat.t = 0; combat.hitDone = false;
+  if(name === 'jab'){ combat.chain = (combat.chainT > 0 ? combat.chain + 1 : 0) % 3; combat.chainT = 0.9; }
+  if(name === 'roll'){
+    const s = Math.sin(player.facing), c = Math.cos(player.facing);
+    player.vel.x += s*13; player.vel.z += c*13;
+  }
+  if(name === 'batarang') throwBatarang();
+}
+
+/* ---- batarangs ----------------------------------------------------------- */
+const BAT_GEO = (function(){
+  const parts = [];
+  const body = new THREE.BoxGeometry(0.30, 0.03, 0.10);
+  parts.push(body);
+  for(const sx of [-1,1]){
+    const w = new THREE.BoxGeometry(0.15, 0.028, 0.20);
+    w.rotateY(sx*0.55); w.translate(sx*0.20, 0, -0.06);
+    parts.push(w);
+    const t = new THREE.BoxGeometry(0.10, 0.026, 0.10);
+    t.rotateY(sx*0.9); t.translate(sx*0.30, 0, 0.04);
+    parts.push(t);
+  }
+  return mergeGeometries(parts);
+})();
+const batMat = new THREE.MeshStandardMaterial({ color:0x1a1d23, roughness:0.3,
+                 metalness:0.92, envMapIntensity:1.6 });
+const BATARANGS = [];
+for(let i=0;i<6;i++){
+  const m = new THREE.Mesh(BAT_GEO, batMat);
+  m.castShadow = true; m.visible = false; cityScene.add(m);
+  BATARANGS.push({ mesh:m, live:false, t:0, vel:new THREE.Vector3(), spin:0 });
+}
+const _bDir = new THREE.Vector3();
+function throwBatarang(){
+  const b = BATARANGS.find(o=>!o.live);
+  if(!b) return;
+  cityCam.getWorldDirection(_bDir);
+  b.mesh.position.set(player.pos.x, player.pos.y + PCFG.height*0.66, player.pos.z)
+       .addScaledVector(_bDir, 0.7);
+  b.vel.copy(_bDir).multiplyScalar(46);
+  b.live = true; b.t = 0; b.spin = 0; b.mesh.visible = true;
+}
+function updateBatarangs(dt){
+  for(const b of BATARANGS){
+    if(!b.live) continue;
+    b.t += dt;
+    b.vel.y -= 5.5*dt;                       // a shallow arc, not a bullet
+    b.mesh.position.addScaledVector(b.vel, dt);
+    b.spin += dt*34;
+    b.mesh.rotation.set(0.25, b.spin, 0.1);
+    const g = groundAt(b.mesh.position.x, b.mesh.position.z, b.mesh.position.y);
+    let hit = b.mesh.position.y <= g + 0.05;
+    if(!hit){
+      for(const c of collidersNear(b.mesh.position.x, b.mesh.position.z)){
+        const p = b.mesh.position;
+        if(p.y < c.top && p.x > c.x-c.hw && p.x < c.x+c.hw && p.z > c.z-c.hd && p.z < c.z+c.hd){ hit = true; break; }
+      }
+    }
+    if(hit || b.t > 2.6){ b.live = false; b.mesh.visible = false; }
+  }
+}
+
+/* ---- drive the rig ------------------------------------------------------- */
+function updateCombat(dt, t){
+  combat.chainT = Math.max(0, combat.chainT - dt);
+  updateBatarangs(dt);
+  if(!combat.move) return false;
+  const M = MOVES[combat.move];
+  combat.t += dt;
+  if(!combat.hitDone && M.hit > 0 && combat.t >= M.hit){
+    combat.hitDone = true;
+    cam.shake = Math.max(cam.shake, combat.move === 'uppercut' ? 0.17 : 0.11);
+    FX.punch = Math.max(FX.punch, combat.move === 'uppercut' ? 0.5 : 0.32);
+  }
+  if(combat.t >= M.dur){ combat.move = null; return false; }
+  const a = trackAt(M.keys, combat.t);
+  applyPose(batman, a, 1);
+  const yaw = player.facing, f = a[PKI.fwd];
+  if(f){ batman.root.position.x += Math.sin(yaw)*f; batman.root.position.z += Math.cos(yaw)*f; }
+  return true;
 }
 
 window.GOTHAM = {
